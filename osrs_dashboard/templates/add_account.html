@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if account_id else 'Add' }} Account — OSRS{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header">
+        <i class="bi bi-person-circle me-2"></i>
+        {{ 'Edit Account' if account_id else 'Add Account' }}
+      </div>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('accounts.edit_account_post', account_id=account_id) if account_id else url_for('accounts.add_account_post') }}">
+
+          <div class="mb-3">
+            <label class="form-label">In-Game Username <span class="text-danger">*</span></label>
+            <input type="text" name="username" class="form-control"
+                   value="{{ account.username if account else '' }}" required
+                   placeholder="e.g. zezima">
+            <div class="form-text text-secondary">Used to fetch hiscores. Must match exactly.</div>
+          </div>
+
+          <hr style="border-color:#2a2a4a;">
+
+          <div class="row">
+            <div class="col-md-6 mb-3">
+              <label class="form-label">Login Email</label>
+              <input type="email" name="login_email" class="form-control"
+                     value="{{ account.login_email if account else '' }}"
+                     placeholder="account@email.com" autocomplete="off">
+            </div>
+            <div class="col-md-6 mb-3">
+              <label class="form-label">Password</label>
+              <div class="input-group">
+                <input type="password" name="password" id="pw_field" class="form-control"
+                       value="{{ account.password if account else '' }}" autocomplete="off">
+                <button type="button" class="btn btn-outline-secondary" onclick="togglePw('pw_field', this)">
+                  <i class="bi bi-eye"></i>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="col-md-6 mb-3">
+              <label class="form-label">Bank PIN</label>
+              <div class="input-group">
+                <input type="password" name="bank_pin" id="pin_field" class="form-control"
+                       value="{{ account.bank_pin if account else '' }}"
+                       maxlength="4" placeholder="4-digit PIN" autocomplete="off">
+                <button type="button" class="btn btn-outline-secondary" onclick="togglePw('pin_field', this)">
+                  <i class="bi bi-eye"></i>
+                </button>
+              </div>
+            </div>
+            <div class="col-md-6 mb-3">
+              <label class="form-label">Authenticator Secret (BASE32)</label>
+              <div class="input-group">
+                <input type="password" name="totp_secret" id="totp_field" class="form-control"
+                       value="{{ account.totp_secret if account else '' }}"
+                       placeholder="BASE32 TOTP secret" autocomplete="off">
+                <button type="button" class="btn btn-outline-secondary" onclick="togglePw('totp_field', this)">
+                  <i class="bi bi-eye"></i>
+                </button>
+              </div>
+              <div class="form-text text-secondary">The secret key from your authenticator app setup, not the 6-digit code.</div>
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Proxy URL</label>
+            <input type="text" name="proxy_url" class="form-control"
+                   value="{{ account.proxy_url if account else '' }}"
+                   placeholder="socks5://user:pass@host:port or http://host:port">
+            <div class="form-text text-secondary">Optional. Used when fetching hiscores for this account.</div>
+          </div>
+
+          <div class="row">
+            <div class="col-md-6 mb-3">
+              <label class="form-label">Account State</label>
+              <select name="state" class="form-select">
+                {% set cur_state = row.state if row and row['state'] else 'running' %}
+                <option value="running" {% if cur_state == 'running' %}selected{% endif %}>Running</option>
+                <option value="banned" {% if cur_state == 'banned' %}selected{% endif %}>Banned</option>
+                <option value="sold" {% if cur_state == 'sold' %}selected{% endif %}>Sold</option>
+              </select>
+            </div>
+            <div class="col-md-6 mb-3">
+              <label class="form-label">Notes</label>
+              <textarea name="notes" class="form-control" rows="1"
+                        placeholder="Any notes about this account">{{ account.notes if account else '' }}</textarea>
+            </div>
+          </div>
+
+          <div class="d-flex gap-2">
+            <button type="submit" class="btn btn-osrs">
+              <i class="bi bi-check-circle"></i> {{ 'Save Changes' if account_id else 'Add Account' }}
+            </button>
+            <a href="{{ url_for('accounts.dashboard') }}" class="btn btn-outline-secondary">Cancel</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+function togglePw(fieldId, btn) {
+  const f = document.getElementById(fieldId);
+  if (f.type === 'password') {
+    f.type = 'text';
+    btn.innerHTML = '<i class="bi bi-eye-slash"></i>';
+  } else {
+    f.type = 'password';
+    btn.innerHTML = '<i class="bi bi-eye"></i>';
+  }
+}
+</script>
+{% endblock %}

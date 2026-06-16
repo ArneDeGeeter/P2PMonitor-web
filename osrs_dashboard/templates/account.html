@@ -1,0 +1,546 @@
+{% extends "base.html" %}
+{% block title %}{{ row['username'] }} — OSRS Dashboard{% endblock %}
+{% block content %}
+<div class="d-flex align-items-center mb-4 gap-3 flex-wrap">
+  <h4 class="text-warning mb-0">
+    <i class="bi bi-person-circle me-2"></i>{{ row['username'] }}
+  </h4>
+  {% if row['state'] == 'running' %}
+    <span class="badge" style="background:#5cb85c; font-size:0.85rem;">Running</span>
+  {% elif row['state'] == 'banned' %}
+    <span class="badge" style="background:#d9534f; font-size:0.85rem;">Banned</span>
+  {% else %}
+    <span class="badge" style="background:#f0ad4e; color:#1a1a2e; font-size:0.85rem;">Sold</span>
+  {% endif %}
+  <!-- Quick state change -->
+  <div class="dropdown">
+    <button class="btn btn-sm btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown">
+      <i class="bi bi-toggles"></i> State
+    </button>
+    <ul class="dropdown-menu dropdown-menu-dark">
+      <li>
+        <form method="POST" action="{{ url_for('accounts.set_state', account_id=account_id) }}">
+          <input type="hidden" name="state" value="running">
+          <button type="submit" class="dropdown-item" style="color:#5cb85c;">
+            <i class="bi bi-play-circle"></i> Running
+          </button>
+        </form>
+      </li>
+      <li>
+        <form method="POST" action="{{ url_for('accounts.set_state', account_id=account_id) }}">
+          <input type="hidden" name="state" value="banned">
+          <button type="submit" class="dropdown-item" style="color:#d9534f;">
+            <i class="bi bi-slash-circle"></i> Banned
+          </button>
+        </form>
+      </li>
+      <li>
+        <form method="POST" action="{{ url_for('accounts.set_state', account_id=account_id) }}">
+          <input type="hidden" name="state" value="sold">
+          <button type="submit" class="dropdown-item" style="color:#f0ad4e;">
+            <i class="bi bi-currency-dollar"></i> Sold
+          </button>
+        </form>
+      </li>
+    </ul>
+  </div>
+  <a href="{{ url_for('accounts.edit_account', account_id=account_id) }}"
+     class="btn btn-sm btn-outline-secondary"><i class="bi bi-pencil"></i> Edit</a>
+  <form method="POST" action="{{ url_for('hiscores.refresh', account_id=account_id) }}" class="d-inline">
+    <button class="btn btn-sm btn-outline-info"><i class="bi bi-arrow-clockwise"></i> Refresh Hiscores</button>
+  </form>
+  <span id="poll-status" class="text-secondary ms-auto" style="font-size:0.8rem;">
+    <i class="bi bi-clock"></i> Auto-refresh: checking…
+  </span>
+  <a href="{{ url_for('accounts.dashboard') }}" class="btn btn-sm btn-outline-secondary">
+    <i class="bi bi-arrow-left"></i> Back
+  </a>
+</div>
+
+<!-- Summary stats -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="stat-box">
+      <div class="value">
+        {% if latest %}{{ latest.skills.overall.level }}{% else %}—{% endif %}
+      </div>
+      <div class="label">Total Level</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="stat-box">
+      <div class="value">
+        {% if latest and latest.skills.overall.xp > 0 %}
+          {{ "{:,}".format(latest.skills.overall.xp) }}
+        {% else %}—{% endif %}
+      </div>
+      <div class="label">Total XP</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="stat-box">
+      {% set has_real = total_gbp > 0 or total_usd > 0 or total_eur > 0 %}
+      {% if has_real %}
+        {% if total_gbp > 0 %}<div class="value" style="font-size:1.2rem;">£{{ "%.2f"|format(total_gbp) }}</div>{% endif %}
+        {% if total_usd > 0 %}<div class="value" style="font-size:1.2rem;">${{ "%.2f"|format(total_usd) }}</div>{% endif %}
+        {% if total_eur > 0 %}<div class="value" style="font-size:1.2rem;">€{{ "%.2f"|format(total_eur) }}</div>{% endif %}
+      {% else %}
+        <div class="value">—</div>
+      {% endif %}
+      <div class="label">Real Money Spent</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="stat-box">
+      <div class="value">{{ "{:,.0f}".format(total_gp) if total_gp > 0 else "—" }}</div>
+      <div class="label">GP Spent</div>
+    </div>
+  </div>
+</div>
+
+<!-- Tabs -->
+<ul class="nav nav-tabs mb-3" id="accountTabs" role="tablist">
+  <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#skills">
+    <i class="bi bi-bar-chart-line"></i> Skills
+  </button></li>
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#expenses" id="expenses-tab">
+    <i class="bi bi-cash-coin"></i> Expenses
+  </button></li>
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#credentials" id="creds-tab">
+    <i class="bi bi-key-fill"></i> Credentials
+  </button></li>
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#chart-tab">
+    <i class="bi bi-graph-up"></i> XP Chart
+  </button></li>
+</ul>
+
+<div class="tab-content">
+
+  <!-- Skills tab -->
+  <div class="tab-pane fade show active" id="skills">
+    {% if latest %}
+    <div class="card">
+      <div class="card-header d-flex justify-content-between">
+        <span>Skill Levels</span>
+        <small class="text-secondary">Last updated: {{ latest.polled_at[:16] }}</small>
+      </div>
+      <div class="card-body p-0">
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th>Skill</th>
+              <th>Level</th>
+              <th>XP</th>
+              <th>Rank</th>
+              <th>XP Gained</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for skill in skills %}
+            {% set snap = latest.skills.get(skill) %}
+            {% if snap %}
+            <tr>
+              <td class="fw-bold">{{ skill.title() }}</td>
+              <td>{{ snap.level if skill != 'overall' else snap.level }}</td>
+              <td>{{ "{:,}".format(snap.xp) if snap.xp > 0 else '—' }}</td>
+              <td>{{ "{:,}".format(snap.rank) if snap.rank > 0 else 'Unranked' }}</td>
+              <td>
+                {% if deltas.get(skill, 0) > 0 %}
+                  <span class="badge-xp">+{{ "{:,}".format(deltas[skill]) }}</span>
+                {% else %}
+                  <span class="text-secondary">—</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endif %}
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% else %}
+    <div class="text-center py-5">
+      <i class="bi bi-bar-chart" style="font-size:2.5rem; color:#c8a951;"></i>
+      <p class="text-secondary mt-3">No hiscores data yet.</p>
+      <form method="POST" action="{{ url_for('hiscores.refresh', account_id=account_id) }}">
+        <button class="btn btn-osrs">Fetch Hiscores Now</button>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Expenses tab -->
+  <div class="tab-pane fade" id="expenses">
+    <div class="card mb-3">
+      <div class="card-header">Add Entry</div>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('expenses.add_expense', account_id=account_id) }}">
+          <div class="row g-2">
+            <div class="col-md-2">
+              <select name="type" class="form-select form-select-sm">
+                <option value="expense">Expense</option>
+                <option value="income">Income</option>
+              </select>
+            </div>
+            <div class="col-md-2">
+              <select name="category" class="form-select form-select-sm">
+                <option value="membership">Membership</option>
+                <option value="bond">Bond</option>
+                <option value="gp_sink">GP Sink</option>
+                <option value="sale">Sale</option>
+                <option value="misc">Misc</option>
+              </select>
+            </div>
+            <div class="col-md-1">
+              <select name="currency" class="form-select form-select-sm">
+                <option value="GBP">£ GBP</option>
+                <option value="USD">$ USD</option>
+                <option value="EUR">€ EUR</option>
+                <option value="GP">GP</option>
+              </select>
+            </div>
+            <div class="col-md-2">
+              <input type="number" name="amount" step="0.01" min="0" class="form-control form-control-sm"
+                     placeholder="Amount" required>
+            </div>
+            <div class="col-md-2">
+              <input type="date" name="date_of" class="form-control form-control-sm" required>
+            </div>
+            <div class="col-md-2">
+              <input type="text" name="notes" class="form-control form-control-sm" placeholder="Notes (optional)">
+            </div>
+            <div class="col-md-1">
+              <button type="submit" class="btn btn-osrs btn-sm w-100">Add</button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Expense summary -->
+    <div class="row g-2 mb-3">
+      {% if total_gbp > 0 %}
+      <div class="col-auto">
+        <span class="badge bg-success fs-6">GBP: £{{ "%.2f"|format(total_gbp) }}</span>
+      </div>
+      {% endif %}
+      {% if total_usd > 0 %}
+      <div class="col-auto">
+        <span class="badge bg-primary fs-6">USD: ${{ "%.2f"|format(total_usd) }}</span>
+      </div>
+      {% endif %}
+      {% if total_eur > 0 %}
+      <div class="col-auto">
+        <span class="badge bg-info fs-6">EUR: €{{ "%.2f"|format(total_eur) }}</span>
+      </div>
+      {% endif %}
+      {% if total_gp > 0 %}
+      <div class="col-auto">
+        <span class="badge bg-warning text-dark fs-6">GP: {{ "{:,.0f}".format(total_gp) }}</span>
+      </div>
+      {% endif %}
+    </div>
+
+    {% if expenses %}
+    <div class="card">
+      <div class="card-body p-0">
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr><th>Date</th><th>Type</th><th>Category</th><th>Amount</th><th>Notes</th><th></th></tr>
+          </thead>
+          <tbody>
+            {% for e in expenses %}
+            <tr>
+              <td>{{ e.date_of }}</td>
+              <td>
+                {% if e.type == 'income' %}
+                  <span class="badge" style="background:#5cb85c;">Income</span>
+                {% else %}
+                  <span class="badge" style="background:#d9534f;">Expense</span>
+                {% endif %}
+              </td>
+              <td><span class="badge bg-secondary">{{ e.category }}</span></td>
+              <td>
+                {% if e.currency == 'GBP' %}£{% elif e.currency == 'USD' %}${% elif e.currency == 'EUR' %}€{% endif %}
+                {{ "{:,.2f}".format(e.amount) if e.currency != 'GP' else "{:,.0f}".format(e.amount) + ' gp' }}
+              </td>
+              <td class="text-secondary">{{ e.notes or '' }}</td>
+              <td class="text-end">
+                <form method="POST"
+                      action="{{ url_for('expenses.delete_expense_route', account_id=account_id, expense_id=e.id) }}"
+                      onsubmit="return confirm('Delete this expense?')">
+                  <button class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% else %}
+    <p class="text-secondary text-center py-4">No expenses recorded yet.</p>
+    {% endif %}
+  </div>
+
+  <!-- Credentials tab -->
+  <div class="tab-pane fade" id="credentials">
+    <div class="card">
+      <div class="card-header">Account Credentials</div>
+      <div class="card-body" id="creds-body">
+        <p class="text-secondary">Loading...</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- XP Chart tab -->
+  <div class="tab-pane fade" id="chart-tab">
+    <div class="card">
+      <div class="card-header d-flex gap-2 align-items-center">
+        XP Progression
+        <div class="btn-group btn-group-sm ms-2" role="group">
+          <button id="modeTotalXP" class="btn btn-osrs" onclick="setChartMode('total')">Total XP</button>
+          <button id="modePerSkill" class="btn btn-outline-warning" onclick="setChartMode('skill')">Per Skill</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div id="chartLegend" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:14px;"></div>
+        <canvas id="xpChart" height="100"></canvas>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+// Activate correct tab from hash
+const hash = window.location.hash;
+if (hash) {
+  const tabMap = {'#expenses': 'expenses-tab', '#credentials': 'creds-tab'};
+  const targetId = tabMap[hash];
+  if (targetId) {
+    const el = document.getElementById(targetId);
+    if (el) bootstrap.Tab.getOrCreateInstance(el).show();
+  }
+}
+
+// Load credentials when tab shown
+document.getElementById('creds-tab').addEventListener('shown.bs.tab', () => {
+  fetch('{{ url_for("accounts.credentials", account_id=account_id) }}')
+    .then(r => r.json())
+    .then(data => {
+      const body = document.getElementById('creds-body');
+
+      const field = (label, value, isSecret=false) => {
+        const hasValue = value !== null && value !== undefined && value !== '' && value !== 'None';
+        const id = 'f_' + Math.random().toString(36).slice(2);
+        const displayVal = hasValue
+          ? (isSecret ? '••••••••' : `<span style="color:#e0e0e0;font-family:monospace;">${escHtml(value)}</span>`)
+          : `<span style="color:#555577;font-style:italic;">not set</span>`;
+        const btn = (hasValue && isSecret)
+          ? `<button class="btn btn-sm btn-outline-secondary ms-2" onclick="toggleVal('${id}','${escJs(value)}')" title="Show/hide"><i class="bi bi-eye"></i></button>`
+          : '';
+        return `<tr>
+          <td style="color:#a0a0c0;width:160px;padding:10px 16px;white-space:nowrap;">${label}</td>
+          <td style="padding:10px 16px;"><span id="${id}">${displayVal}</span>${btn}</td>
+        </tr>`;
+      };
+
+      let rows = field('Login Email', data.login_email);
+      rows += field('Password', data.password, true);
+      rows += field('Bank PIN', data.bank_pin, true);
+      rows += field('Proxy URL', data.proxy_url);
+      rows += field('Notes', data.notes);
+
+      if (data.totp_secret) {
+        rows += `<tr>
+          <td style="color:#a0a0c0;padding:10px 16px;white-space:nowrap;">Authenticator</td>
+          <td style="padding:10px 16px;">
+            <span class="totp-code" id="totp-code" style="font-size:1.6rem;letter-spacing:0.3em;color:#c8a951;font-family:monospace;">${data.totp_code || '------'}</span>
+            <span id="totp-timer" style="color:#a0a0c0;font-size:0.85rem;margin-left:12px;">expires in ${data.totp_secs}s</span>
+          </td>
+        </tr>`;
+        startTotpPoll();
+      } else {
+        rows += field('Authenticator', null);
+      }
+
+      body.innerHTML = `<table style="width:100%;border-collapse:collapse;">${rows}</table>`;
+    });
+});
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function escJs(s) {
+  return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+}
+function toggleVal(id, val) {
+  const el = document.getElementById(id);
+  if (el.textContent.includes('•')) {
+    el.innerHTML = `<span style="color:#e0e0e0;font-family:monospace;">${escHtml(val)}</span>`;
+  } else {
+    el.innerHTML = '••••••••';
+  }
+}
+
+function startTotpPoll() {
+  function update() {
+    fetch('{{ url_for("accounts.totp_code", account_id=account_id) }}')
+      .then(r => r.json())
+      .then(d => {
+        const code = document.getElementById('totp-code');
+        const timer = document.getElementById('totp-timer');
+        if (code && d.code) code.textContent = d.code;
+        if (timer && d.seconds_remaining !== null) timer.textContent = `(${d.seconds_remaining}s)`;
+      });
+  }
+  update();
+  setInterval(update, 5000);
+}
+
+// XP Chart
+document.querySelector('[data-bs-target="#chart-tab"]').addEventListener('shown.bs.tab', () => {
+  if (window._chartLoaded) return;
+  window._chartLoaded = true;
+  fetch('{{ url_for("hiscores.chart_data", account_id=account_id) }}')
+    .then(r => r.json())
+    .then(data => {
+      if (!data.labels.length) {
+        document.getElementById('xpChart').closest('.card-body').innerHTML =
+          '<p class="text-secondary text-center py-4">Not enough data for chart. Refresh hiscores a few times to build history.</p>';
+        return;
+      }
+      const colors = ['#5bc0de','#5cb85c','#d9534f','#f0ad4e','#337ab7',
+                       '#77dd77','#ff6961','#aec6cf','#b39eb5','#fdfd96','#84b6f4'];
+      const datasets = data.datasets.map((ds, i) => ({
+        ...ds,
+        borderColor: ds.isOverall ? '#c8a951' : colors[i % colors.length],
+        borderWidth: ds.isOverall ? 3 : 1.5,
+        backgroundColor: 'transparent',
+        pointRadius: ds.isOverall ? 4 : 2,
+        tension: 0,
+        hidden: !ds.isOverall,
+      }));
+      window._chart = new Chart(document.getElementById('xpChart'), {
+        type: 'line',
+        data: {labels: data.labels, datasets},
+        options: {
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: {ticks: {color: '#a0a0c0'}, grid: {color: '#2a2a4a'}},
+            y: {grid: {color: '#2a2a4a'},
+                ticks: {color: '#a0a0c0', callback: v => v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? (v/1e3).toFixed(0)+'K' : v}},
+          },
+        },
+      });
+      renderChartLegend();
+    });
+});
+
+const SKILL_ICONS = {
+  'Total XP':     'https://oldschool.runescape.wiki/images/Stats_icon_(detail).png',
+  'Attack':       'https://oldschool.runescape.wiki/images/Attack_icon.png',
+  'Defence':      'https://oldschool.runescape.wiki/images/Defence_icon.png',
+  'Strength':     'https://oldschool.runescape.wiki/images/Strength_icon.png',
+  'Hitpoints':    'https://oldschool.runescape.wiki/images/Hitpoints_icon.png',
+  'Ranged':       'https://oldschool.runescape.wiki/images/Ranged_icon.png',
+  'Prayer':       'https://oldschool.runescape.wiki/images/Prayer_icon.png',
+  'Magic':        'https://oldschool.runescape.wiki/images/Magic_icon.png',
+  'Cooking':      'https://oldschool.runescape.wiki/images/Cooking_icon.png',
+  'Woodcutting':  'https://oldschool.runescape.wiki/images/Woodcutting_icon.png',
+  'Fletching':    'https://oldschool.runescape.wiki/images/Fletching_icon.png',
+  'Fishing':      'https://oldschool.runescape.wiki/images/Fishing_icon.png',
+  'Firemaking':   'https://oldschool.runescape.wiki/images/Firemaking_icon.png',
+  'Crafting':     'https://oldschool.runescape.wiki/images/Crafting_icon.png',
+  'Smithing':     'https://oldschool.runescape.wiki/images/Smithing_icon.png',
+  'Mining':       'https://oldschool.runescape.wiki/images/Mining_icon.png',
+  'Herblore':     'https://oldschool.runescape.wiki/images/Herblore_icon.png',
+  'Agility':      'https://oldschool.runescape.wiki/images/Agility_icon.png',
+  'Thieving':     'https://oldschool.runescape.wiki/images/Thieving_icon.png',
+  'Slayer':       'https://oldschool.runescape.wiki/images/Slayer_icon.png',
+  'Farming':      'https://oldschool.runescape.wiki/images/Farming_icon.png',
+  'Runecraft':    'https://oldschool.runescape.wiki/images/Runecraft_icon.png',
+  'Hunter':       'https://oldschool.runescape.wiki/images/Hunter_icon.png',
+  'Construction': 'https://oldschool.runescape.wiki/images/Construction_icon.png',
+  'Sailing':      'https://oldschool.runescape.wiki/images/Sailing_icon.png',
+};
+
+function renderChartLegend() {
+  const chart = window._chart;
+  const legend = document.getElementById('chartLegend');
+  if (!chart || !legend) return;
+
+  legend.innerHTML = '';
+  chart.data.datasets.forEach((ds, i) => {
+    // In total mode show only the overall item; in skill mode skip overall
+    if (window._chartMode === 'total' && !ds.isOverall) return;
+    if (window._chartMode === 'skill' && ds.isOverall) return;
+
+    const item = document.createElement('div');
+    item.title = ds.label;
+    item.style.cssText = [
+      'display:inline-flex;align-items:center;gap:5px;',
+      'padding:3px 8px 3px 4px;border-radius:5px;cursor:pointer;',
+      'border:2px solid ' + (ds.hidden ? '#2a2a4a' : ds.borderColor) + ';',
+      'opacity:' + (ds.hidden ? '0.35' : '1') + ';',
+      'transition:opacity .15s,border-color .15s;user-select:none;',
+    ].join('');
+
+    const img = document.createElement('img');
+    img.src = SKILL_ICONS[ds.label] || '';
+    img.width = 20; img.height = 20;
+    img.style.imageRendering = 'pixelated';
+
+    const lbl = document.createElement('span');
+    lbl.textContent = ds.label;
+    lbl.style.cssText = 'font-size:0.72rem;color:#e0e0e0;white-space:nowrap;';
+
+    item.appendChild(img);
+    item.appendChild(lbl);
+
+    item.addEventListener('click', () => {
+      ds.hidden = !ds.hidden;
+      chart.update();
+      renderChartLegend();
+    });
+
+    legend.appendChild(item);
+  });
+}
+
+window._chartMode = 'total';
+
+function setChartMode(mode) {
+  const chart = window._chart;
+  if (!chart) return;
+  window._chartMode = mode;
+  document.getElementById('modeTotalXP').className = mode === 'total' ? 'btn btn-osrs' : 'btn btn-outline-warning';
+  document.getElementById('modePerSkill').className = mode === 'skill' ? 'btn btn-osrs' : 'btn btn-outline-warning';
+  chart.data.datasets.forEach(ds => {
+    ds.hidden = mode === 'total' ? !ds.isOverall : ds.isOverall;
+  });
+  chart.update();
+  renderChartLegend();
+}
+
+// Auto-poll status
+function updatePollStatus() {
+  fetch('{{ url_for("hiscores.get_poll_status") }}')
+    .then(r => r.json())
+    .then(d => {
+      const el = document.getElementById('poll-status');
+      if (!el) return;
+      if (d.last_poll && d.next_poll_label) {
+        el.innerHTML = `<i class="bi bi-clock"></i> Last auto-poll: ${d.last_poll} — next in ${d.next_poll_label}`;
+      } else {
+        el.innerHTML = `<i class="bi bi-clock"></i> Auto-poll pending…`;
+      }
+    });
+}
+updatePollStatus();
+setInterval(updatePollStatus, 30000);
+</script>
+{% endblock %}

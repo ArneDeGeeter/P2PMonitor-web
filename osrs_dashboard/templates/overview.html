@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% block title %}Financial Overview — OSRS{% endblock %}
+{% block content %}
+<div class="row mb-4">
+  <div class="col">
+    <h4 class="text-warning mb-0"><i class="bi bi-cash-stack me-2"></i>Financial Overview</h4>
+  </div>
+</div>
+
+<!-- Global summary cards -->
+<div class="row g-3 mb-4">
+  {% for cur in data.currencies %}
+  {% set g = data.global[cur] %}
+  {% if g.spent > 0 or g.received > 0 %}
+  <div class="col-6 col-md-3">
+    <div class="card h-100">
+      <div class="card-header text-center">{{ cur }}</div>
+      <div class="card-body text-center py-2">
+        {% if cur == 'GBP' %}{% set sym = '£' %}
+        {% elif cur == 'USD' %}{% set sym = '$' %}
+        {% elif cur == 'EUR' %}{% set sym = '€' %}
+        {% else %}{% set sym = '' %}{% endif %}
+        <div class="mb-1">
+          <small class="text-secondary">Spent</small><br>
+          <span style="color:#d9534f; font-weight:bold;">
+            {% if cur == 'GP' %}{{ "{:,.0f}".format(g.spent) }} gp
+            {% else %}{{ sym }}{{ "%.2f"|format(g.spent) }}{% endif %}
+          </span>
+        </div>
+        <div class="mb-1">
+          <small class="text-secondary">Received</small><br>
+          <span style="color:#5cb85c; font-weight:bold;">
+            {% if cur == 'GP' %}{{ "{:,.0f}".format(g.received) }} gp
+            {% else %}{{ sym }}{{ "%.2f"|format(g.received) }}{% endif %}
+          </span>
+        </div>
+        <hr style="border-color:#2a2a4a; margin:6px 0;">
+        <div>
+          <small class="text-secondary">Net</small><br>
+          <span style="color:{% if g.net >= 0 %}#5cb85c{% else %}#d9534f{% endif %}; font-weight:bold; font-size:1.1rem;">
+            {% if cur == 'GP' %}{{ "{:,.0f}".format(g.net) }} gp
+            {% else %}{{ sym }}{{ "%.2f"|format(g.net) }}{% endif %}
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+  {% endfor %}
+</div>
+
+<!-- Per-account breakdown -->
+{% if data.accounts %}
+<div class="card">
+  <div class="card-header"><i class="bi bi-table me-1"></i>Per Account</div>
+  <div class="card-body p-0">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>Account</th>
+          <th>State</th>
+          <th>Spent</th>
+          <th>Received</th>
+          <th>Net</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for acc in data.accounts %}
+        {% set has_data = false %}
+        {% for cur in data.currencies %}
+          {% if acc.by_currency[cur].spent > 0 or acc.by_currency[cur].received > 0 %}
+            {% set has_data = true %}
+          {% endif %}
+        {% endfor %}
+        <tr>
+          <td>
+            <a href="{{ url_for('accounts.account_detail', account_id=acc.id) }}" class="fw-bold">
+              {{ acc.username }}
+            </a>
+          </td>
+          <td>
+            {% if acc.state == 'running' %}
+              <span class="badge" style="background:#5cb85c;">Running</span>
+            {% elif acc.state == 'banned' %}
+              <span class="badge" style="background:#d9534f;">Banned</span>
+            {% else %}
+              <span class="badge" style="background:#f0ad4e; color:#1a1a2e;">Sold</span>
+            {% endif %}
+          </td>
+          <td>
+            {% for cur in data.currencies %}
+              {% set b = acc.by_currency[cur] %}
+              {% if b.spent > 0 %}
+                <div style="color:#d9534f;">
+                  {% if cur == 'GBP' %}£{{ "%.2f"|format(b.spent) }}
+                  {% elif cur == 'USD' %}${{ "%.2f"|format(b.spent) }}
+                  {% elif cur == 'EUR' %}€{{ "%.2f"|format(b.spent) }}
+                  {% else %}{{ "{:,.0f}".format(b.spent) }} gp{% endif %}
+                </div>
+              {% endif %}
+            {% endfor %}
+            {% if not has_data %}<span class="text-secondary">—</span>{% endif %}
+          </td>
+          <td>
+            {% for cur in data.currencies %}
+              {% set b = acc.by_currency[cur] %}
+              {% if b.received > 0 %}
+                <div style="color:#5cb85c;">
+                  {% if cur == 'GBP' %}£{{ "%.2f"|format(b.received) }}
+                  {% elif cur == 'USD' %}${{ "%.2f"|format(b.received) }}
+                  {% elif cur == 'EUR' %}€{{ "%.2f"|format(b.received) }}
+                  {% else %}{{ "{:,.0f}".format(b.received) }} gp{% endif %}
+                </div>
+              {% endif %}
+            {% endfor %}
+            {% if not has_data %}<span class="text-secondary">—</span>{% endif %}
+          </td>
+          <td>
+            {% for cur in data.currencies %}
+              {% set b = acc.by_currency[cur] %}
+              {% if b.spent > 0 or b.received > 0 %}
+                <div style="color:{% if b.net >= 0 %}#5cb85c{% else %}#d9534f{% endif %};">
+                  {% if cur == 'GBP' %}£{{ "%.2f"|format(b.net) }}
+                  {% elif cur == 'USD' %}${{ "%.2f"|format(b.net) }}
+                  {% elif cur == 'EUR' %}€{{ "%.2f"|format(b.net) }}
+                  {% else %}{{ "{:,.0f}".format(b.net) }} gp{% endif %}
+                </div>
+              {% endif %}
+            {% endfor %}
+            {% if not has_data %}<span class="text-secondary">—</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="text-center py-5">
+  <i class="bi bi-cash-coin" style="font-size:3rem; color:#c8a951;"></i>
+  <p class="text-secondary mt-3">No accounts or expenses recorded yet.</p>
+</div>
+{% endif %}
+{% endblock %}

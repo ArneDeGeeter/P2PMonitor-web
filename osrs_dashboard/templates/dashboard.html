@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — OSRS{% endblock %}
+{% block content %}
+<div class="row mb-4">
+  <div class="col">
+    <h4 class="text-warning mb-0"><i class="bi bi-grid-3x3-gap-fill me-2"></i>Accounts</h4>
+  </div>
+  <div class="col-auto">
+    <a href="{{ url_for('accounts.add_account') }}" class="btn btn-osrs btn-sm">
+      <i class="bi bi-plus-circle"></i> Add Account
+    </a>
+  </div>
+</div>
+
+{% if accounts %}
+<div class="card">
+  <div class="card-body p-0">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>Username</th>
+          <th>State</th>
+          <th>Total XP</th>
+          <th>Last Polled</th>
+          <th>Expenses</th>
+          <th class="text-end">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for acc in accounts %}
+        <tr>
+          <td>
+            <a href="{{ url_for('accounts.account_detail', account_id=acc.id) }}" class="fw-bold">
+              {{ acc.username }}
+            </a>
+          </td>
+          <td>
+            {% if acc.state == 'running' %}
+              <span class="badge" style="background:#5cb85c;">Running</span>
+            {% elif acc.state == 'banned' %}
+              <span class="badge" style="background:#d9534f;">Banned</span>
+            {% else %}
+              <span class="badge" style="background:#f0ad4e; color:#1a1a2e;">Sold</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if acc.total_xp and acc.total_xp > 0 %}
+              {{ "{:,}".format(acc.total_xp) }}
+            {% else %}
+              <span class="text-secondary">—</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if acc.last_polled %}
+              <span class="text-secondary" title="{{ acc.last_polled }}">{{ acc.last_polled[:16] }}</span>
+            {% else %}
+              <span class="text-secondary">Never</span>
+            {% endif %}
+          </td>
+          <td>
+            {% set has_expense = acc.total_cost_gbp > 0 or acc.total_cost_usd > 0 or acc.total_cost_eur > 0 or acc.total_cost_gp > 0 %}
+            {% if has_expense %}
+              {% if acc.total_cost_gbp > 0 %}<div>£{{ "%.2f"|format(acc.total_cost_gbp) }}</div>{% endif %}
+              {% if acc.total_cost_usd > 0 %}<div>${{ "%.2f"|format(acc.total_cost_usd) }}</div>{% endif %}
+              {% if acc.total_cost_eur > 0 %}<div>€{{ "%.2f"|format(acc.total_cost_eur) }}</div>{% endif %}
+              {% if acc.total_cost_gp > 0 %}<div>{{ "{:,.0f}".format(acc.total_cost_gp) }} gp</div>{% endif %}
+            {% else %}
+              <span class="text-secondary">—</span>
+            {% endif %}
+          </td>
+          <td class="text-end">
+            <a href="{{ url_for('accounts.account_detail', account_id=acc.id) }}"
+               class="btn btn-sm btn-outline-warning me-1" title="View">
+              <i class="bi bi-eye"></i>
+            </a>
+            <form method="POST" action="{{ url_for('hiscores.refresh', account_id=acc.id) }}"
+                  class="d-inline" title="Refresh hiscores">
+              <button class="btn btn-sm btn-outline-info me-1"><i class="bi bi-arrow-clockwise"></i></button>
+            </form>
+            <a href="{{ url_for('accounts.edit_account', account_id=acc.id) }}"
+               class="btn btn-sm btn-outline-secondary me-1" title="Edit">
+              <i class="bi bi-pencil"></i>
+            </a>
+            <form method="POST" action="{{ url_for('accounts.delete_account_route', account_id=acc.id) }}"
+                  class="d-inline" onsubmit="return confirm('Delete {{ acc.username }}?')">
+              <button class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="text-center py-5">
+  <i class="bi bi-person-plus" style="font-size:3rem; color:#c8a951;"></i>
+  <p class="text-secondary mt-3">No accounts yet. Add your first OSRS account to get started.</p>
+  <a href="{{ url_for('accounts.add_account') }}" class="btn btn-osrs">Add Account</a>
+</div>
+{% endif %}
+{% endblock %}
