@@ -118,6 +118,24 @@
 
   <!-- Skills tab -->
   <div class="tab-pane fade show active" id="skills">
+    <!-- XP Gained period selector -->
+    <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+      <div class="btn-group btn-group-sm" role="group">
+        {% for p, label in [('1h','1h'),('24h','24h'),('7d','7d'),('30d','30d'),('3m','3m'),('all','All')] %}
+        <a href="?period={{ p }}"
+           class="btn {% if period == p %}btn-osrs{% else %}btn-outline-secondary{% endif %}">{{ label }}</a>
+        {% endfor %}
+      </div>
+      <form method="GET" class="d-flex align-items-center gap-1">
+        <input type="date" name="from" class="form-control form-control-sm"
+               style="width:140px;" value="{{ from_dt }}" required>
+        <span class="text-secondary">→</span>
+        <input type="date" name="to" class="form-control form-control-sm"
+               style="width:140px;" value="{{ to_dt }}" required>
+        <button type="submit" class="btn btn-sm btn-outline-info">Apply</button>
+      </form>
+    </div>
+
     {% if latest %}
     <div class="card">
       <div class="card-header d-flex justify-content-between">
@@ -132,7 +150,7 @@
               <th>Level</th>
               <th>XP</th>
               <th>Rank</th>
-              <th>XP Gained</th>
+              <th>XP Gained <small class="text-secondary fw-normal">({{ xp_label }})</small></th>
             </tr>
           </thead>
           <tbody>
@@ -296,11 +314,15 @@
   <!-- XP Chart tab -->
   <div class="tab-pane fade" id="chart-tab">
     <div class="card">
-      <div class="card-header d-flex gap-2 align-items-center">
+      <div class="card-header d-flex flex-wrap gap-2 align-items-center">
         XP Progression
         <div class="btn-group btn-group-sm ms-2" role="group">
           <button id="modeTotalXP" class="btn btn-osrs" onclick="setChartMode('total')">Total XP</button>
           <button id="modePerSkill" class="btn btn-outline-warning" onclick="setChartMode('skill')">Per Skill</button>
+        </div>
+        <div class="btn-group btn-group-sm ms-2" role="group">
+          <button id="viewAbsolute" class="btn btn-osrs" onclick="setXpView('absolute')">Total XP</button>
+          <button id="viewGained" class="btn btn-outline-warning" onclick="setXpView('gained')">XP Gained</button>
         </div>
       </div>
       <div class="card-body">
@@ -401,6 +423,28 @@ function startTotpPoll() {
 }
 
 // XP Chart
+window._chartMode = 'total';
+window._xpView = 'absolute';
+
+function applyXpView(chart, view) {
+  chart.data.datasets.forEach(ds => {
+    if (view === 'gained') {
+      const base = ds._raw.find(v => v > 0) || 0;
+      ds.data = ds._raw.map(v => Math.max(0, v - base));
+    } else {
+      ds.data = [...ds._raw];
+    }
+  });
+  chart.update();
+}
+
+function setXpView(view) {
+  window._xpView = view;
+  document.getElementById('viewAbsolute').className = view === 'absolute' ? 'btn btn-osrs' : 'btn btn-outline-warning';
+  document.getElementById('viewGained').className   = view === 'gained'   ? 'btn btn-osrs' : 'btn btn-outline-warning';
+  if (window._chart) applyXpView(window._chart, view);
+}
+
 document.querySelector('[data-bs-target="#chart-tab"]').addEventListener('shown.bs.tab', () => {
   if (window._chartLoaded) return;
   window._chartLoaded = true;
@@ -416,6 +460,7 @@ document.querySelector('[data-bs-target="#chart-tab"]').addEventListener('shown.
                        '#77dd77','#ff6961','#aec6cf','#b39eb5','#fdfd96','#84b6f4'];
       const datasets = data.datasets.map((ds, i) => ({
         ...ds,
+        _raw: [...ds.data],
         borderColor: ds.isOverall ? '#c8a951' : colors[i % colors.length],
         borderWidth: ds.isOverall ? 3 : 1.5,
         backgroundColor: 'transparent',
@@ -510,8 +555,6 @@ function renderChartLegend() {
     legend.appendChild(item);
   });
 }
-
-window._chartMode = 'total';
 
 function setChartMode(mode) {
   const chart = window._chart;

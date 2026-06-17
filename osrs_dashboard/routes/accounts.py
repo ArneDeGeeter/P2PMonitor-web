@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from flask import (
     Blueprint, render_template, request, redirect, url_for,
     current_app, flash, jsonify,
@@ -7,7 +8,8 @@ from ..crypto import derive_key, make_fernet
 from ..db import (
     list_accounts, get_account, get_account_secrets,
     insert_account, update_account, delete_account,
-    set_account_state, get_latest_snapshots, SKILLS,
+    set_account_state, get_latest_snapshots, get_snapshot_at_or_before,
+    get_earliest_snapshot, SKILLS,
 )
 from ..totp import get_current_code, seconds_remaining
 
@@ -83,6 +85,26 @@ def add_account_post():
     return redirect(url_for("accounts.dashboard"))
 
 
+_PERIOD_LABELS = {
+    "1h": "last 1 hour",
+    "24h": "last 24 hours",
+    "7d": "last 7 days",
+    "30d": "last 30 days",
+    "3m": "last 3 months",
+    "all": "all time",
+}
+
+
+def _since_dt(period: str) -> str:
+    now = datetime.utcnow()
+    offsets = {"1h": timedelta(hours=1), "24h": timedelta(hours=24),
+               "7d": timedelta(days=7), "30d": timedelta(days=30),
+               "3m": timedelta(days=90)}
+    if period in offsets:
+        return (now - offsets[period]).strftime("%Y-%m-%d %H:%M:%S")
+    return "2000-01-01 00:00:00"
+
+
 @accounts_bp.get("/accounts/<int:account_id>")
 def account_detail(account_id: int):
     conn = _conn()
@@ -91,12 +113,32 @@ def account_detail(account_id: int):
         flash("Account not found.", "danger")
         return redirect(url_for("accounts.dashboard"))
 
-    snaps = get_latest_snapshots(conn, account_id, limit=2)
+    # Determine date range for XP Gained column
+    from_dt = request.args.get("from", "").strip()
+    to_dt = request.args.get("to", "").strip()
+    period = request.args.get("period", "30d") if not (from_dt and to_dt) else "custom"
+
+    if period == "custom" and from_dt and to_dt:
+        since_str = from_dt
+        until_str = to_dt + " 23:59:59"
+        xp_label = f"{from_dt} → {to_dt}"
+    else:
+        since_str = _since_dt(period)
+        until_str = None
+        xp_label = _PERIOD_LABELS.get(period, "last 30 days")
+
+    snaps = get_latest_snapshots(conn, account_id, limit=1)
     latest = snaps[0] if snaps else None
-    prev = snaps[1] if len(snaps) > 1 else None
+
+    if until_str:
+        effective_latest = get_snapshot_at_or_before(conn, account_id, until_str) or latest
+        prev = get_snapshot_at_or_before(conn, account_id, since_str) or get_earliest_snapshot(conn, account_id)
+    else:
+        prev = get_snapshot_at_or_before(conn, account_id, since_str) or get_earliest_snapshot(conn, account_id)
+        effective_latest = latest
 
     from ..db import compute_deltas
-    deltas = compute_deltas(prev, latest) if (prev and latest) else {}
+    deltas = compute_deltas(prev, effective_latest) if (prev and effective_latest) else {}
 
     from ..db import list_expenses
     expenses = list_expenses(conn, account_id)
@@ -118,6 +160,10 @@ def account_detail(account_id: int):
         total_eur=total_eur,
         total_gp=total_gp,
         skills=SKILLS,
+        period=period,
+        from_dt=from_dt,
+        to_dt=to_dt,
+        xp_label=xp_label,
     )
 
 

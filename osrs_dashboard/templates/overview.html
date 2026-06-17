@@ -7,6 +7,47 @@
   </div>
 </div>
 
+<!-- XP Overview Chart -->
+<div class="card mb-4">
+  <div class="card-header d-flex flex-wrap align-items-center gap-2">
+    <span><i class="bi bi-graph-up me-1"></i>XP — All Accounts</span>
+    <div class="btn-group btn-group-sm ms-2" role="group">
+      <button id="modeTotalXP" class="btn btn-osrs" onclick="setChartMode('total')">Total XP</button>
+      <button id="modePerSkill" class="btn btn-outline-warning" onclick="setChartMode('skill')">Per Skill</button>
+    </div>
+    <div class="btn-group btn-group-sm ms-2" role="group">
+      <button id="viewAbsolute" class="btn btn-osrs" onclick="setXpView('absolute')">Total XP</button>
+      <button id="viewGained" class="btn btn-outline-warning" onclick="setXpView('gained')">XP Gained</button>
+    </div>
+    <div class="d-flex flex-wrap align-items-center gap-2 ms-auto">
+      <div class="btn-group btn-group-sm" role="group">
+        {% for p, label in [('1h','1h'),('24h','24h'),('7d','7d'),('30d','30d'),('3m','3m'),('all','All')] %}
+        <a href="?period={{ p }}"
+           class="btn {% if period == p %}btn-osrs{% else %}btn-outline-secondary{% endif %}">{{ label }}</a>
+        {% endfor %}
+      </div>
+      <form method="GET" class="d-flex align-items-center gap-1">
+        <input type="date" name="from" class="form-control form-control-sm"
+               style="width:140px;" value="{{ from_dt }}" required>
+        <span class="text-secondary">→</span>
+        <input type="date" name="to" class="form-control form-control-sm"
+               style="width:140px;" value="{{ to_dt }}" required>
+        <button type="submit" class="btn btn-sm btn-outline-info">Apply</button>
+      </form>
+    </div>
+  </div>
+  <div class="card-body">
+    <div id="overviewChartLegend" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:14px;"></div>
+    <canvas id="overviewXpChart" height="90"></canvas>
+    <p id="overviewChartEmpty" class="text-secondary text-center py-4" style="display:none;">
+      Not enough data for this period.
+    </p>
+    <p class="text-secondary text-center mt-2 mb-0" style="font-size:0.78rem;">
+      Showing <strong>{{ xp_label }}</strong>
+    </p>
+  </div>
+</div>
+
 <!-- Global summary cards -->
 <div class="row g-3 mb-4">
   {% for cur in data.currencies %}
@@ -141,4 +182,148 @@
   <p class="text-secondary mt-3">No accounts or expenses recorded yet.</p>
 </div>
 {% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+const SKILL_ICONS = {
+  'Total XP':     'https://oldschool.runescape.wiki/images/Stats_icon_(detail).png',
+  'Attack':       'https://oldschool.runescape.wiki/images/Attack_icon.png',
+  'Defence':      'https://oldschool.runescape.wiki/images/Defence_icon.png',
+  'Strength':     'https://oldschool.runescape.wiki/images/Strength_icon.png',
+  'Hitpoints':    'https://oldschool.runescape.wiki/images/Hitpoints_icon.png',
+  'Ranged':       'https://oldschool.runescape.wiki/images/Ranged_icon.png',
+  'Prayer':       'https://oldschool.runescape.wiki/images/Prayer_icon.png',
+  'Magic':        'https://oldschool.runescape.wiki/images/Magic_icon.png',
+  'Cooking':      'https://oldschool.runescape.wiki/images/Cooking_icon.png',
+  'Woodcutting':  'https://oldschool.runescape.wiki/images/Woodcutting_icon.png',
+  'Fletching':    'https://oldschool.runescape.wiki/images/Fletching_icon.png',
+  'Fishing':      'https://oldschool.runescape.wiki/images/Fishing_icon.png',
+  'Firemaking':   'https://oldschool.runescape.wiki/images/Firemaking_icon.png',
+  'Crafting':     'https://oldschool.runescape.wiki/images/Crafting_icon.png',
+  'Smithing':     'https://oldschool.runescape.wiki/images/Smithing_icon.png',
+  'Mining':       'https://oldschool.runescape.wiki/images/Mining_icon.png',
+  'Herblore':     'https://oldschool.runescape.wiki/images/Herblore_icon.png',
+  'Agility':      'https://oldschool.runescape.wiki/images/Agility_icon.png',
+  'Thieving':     'https://oldschool.runescape.wiki/images/Thieving_icon.png',
+  'Slayer':       'https://oldschool.runescape.wiki/images/Slayer_icon.png',
+  'Farming':      'https://oldschool.runescape.wiki/images/Farming_icon.png',
+  'Runecraft':    'https://oldschool.runescape.wiki/images/Runecraft_icon.png',
+  'Hunter':       'https://oldschool.runescape.wiki/images/Hunter_icon.png',
+  'Construction': 'https://oldschool.runescape.wiki/images/Construction_icon.png',
+  'Sailing':      'https://oldschool.runescape.wiki/images/Sailing_icon.png',
+};
+
+const colors = ['#5bc0de','#5cb85c','#d9534f','#f0ad4e','#337ab7',
+                 '#77dd77','#ff6961','#aec6cf','#b39eb5','#fdfd96','#84b6f4'];
+
+window._overviewChartMode = 'total';
+window._overviewXpView = 'absolute';
+
+function applyOverviewXpView(chart, view) {
+  chart.data.datasets.forEach(ds => {
+    ds.data = view === 'gained' ? [...ds._gained] : [...ds._raw];
+  });
+  chart.update();
+}
+
+function setXpView(view) {
+  window._overviewXpView = view;
+  document.getElementById('viewAbsolute').className = view === 'absolute' ? 'btn btn-osrs' : 'btn btn-outline-warning';
+  document.getElementById('viewGained').className   = view === 'gained'   ? 'btn btn-osrs' : 'btn btn-outline-warning';
+  if (window._overviewChart) applyOverviewXpView(window._overviewChart, view);
+}
+
+// Build URL preserving current period/date params
+const currentParams = new URLSearchParams(window.location.search);
+const chartParams = new URLSearchParams();
+if (currentParams.get('period')) chartParams.set('period', currentParams.get('period'));
+if (currentParams.get('from'))   chartParams.set('from',   currentParams.get('from'));
+if (currentParams.get('to'))     chartParams.set('to',     currentParams.get('to'));
+
+fetch('{{ url_for("overview.xp_chart_data") }}?' + chartParams.toString())
+  .then(r => r.json())
+  .then(data => {
+    const canvas = document.getElementById('overviewXpChart');
+    const emptyMsg = document.getElementById('overviewChartEmpty');
+    if (!data.labels.length) {
+      canvas.style.display = 'none';
+      emptyMsg.style.display = '';
+      return;
+    }
+    const datasets = data.datasets.map((ds, i) => ({
+      ...ds,
+      _raw: [...ds.data],
+      _gained: [...(ds.gained_data || ds.data)],
+      borderColor: ds.isOverall ? '#c8a951' : colors[i % colors.length],
+      borderWidth: ds.isOverall ? 3 : 1.5,
+      backgroundColor: 'transparent',
+      pointRadius: ds.isOverall ? 4 : 2,
+      tension: 0,
+      hidden: !ds.isOverall,
+    }));
+    window._overviewChart = new Chart(canvas, {
+      type: 'line',
+      data: {labels: data.labels, datasets},
+      options: {
+        responsive: true,
+        plugins: {legend: {display: false}},
+        scales: {
+          x: {ticks: {color: '#a0a0c0'}, grid: {color: '#2a2a4a'}},
+          y: {grid: {color: '#2a2a4a'},
+              ticks: {color: '#a0a0c0', callback: v =>
+                v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? (v/1e3).toFixed(0)+'K' : v}},
+        },
+      },
+    });
+    renderOverviewLegend();
+  });
+
+function renderOverviewLegend() {
+  const chart = window._overviewChart;
+  const legend = document.getElementById('overviewChartLegend');
+  if (!chart || !legend) return;
+  legend.innerHTML = '';
+  chart.data.datasets.forEach((ds, i) => {
+    if (window._overviewChartMode === 'total' && !ds.isOverall) return;
+    if (window._overviewChartMode === 'skill' && ds.isOverall) return;
+    const item = document.createElement('div');
+    item.title = ds.label;
+    item.style.cssText = [
+      'display:inline-flex;align-items:center;gap:5px;',
+      'padding:3px 8px 3px 4px;border-radius:5px;cursor:pointer;',
+      'border:2px solid ' + (ds.hidden ? '#2a2a4a' : ds.borderColor) + ';',
+      'opacity:' + (ds.hidden ? '0.35' : '1') + ';',
+      'transition:opacity .15s,border-color .15s;user-select:none;',
+    ].join('');
+    const img = document.createElement('img');
+    img.src = SKILL_ICONS[ds.label] || '';
+    img.width = 20; img.height = 20;
+    img.style.imageRendering = 'pixelated';
+    const lbl = document.createElement('span');
+    lbl.textContent = ds.label;
+    lbl.style.cssText = 'font-size:0.72rem;color:#e0e0e0;white-space:nowrap;';
+    item.appendChild(img);
+    item.appendChild(lbl);
+    item.addEventListener('click', () => {
+      ds.hidden = !ds.hidden;
+      chart.update();
+      renderOverviewLegend();
+    });
+    legend.appendChild(item);
+  });
+}
+
+function setChartMode(mode) {
+  const chart = window._overviewChart;
+  if (!chart) return;
+  window._overviewChartMode = mode;
+  document.getElementById('modeTotalXP').className  = mode === 'total' ? 'btn btn-osrs' : 'btn btn-outline-warning';
+  document.getElementById('modePerSkill').className = mode === 'skill' ? 'btn btn-osrs' : 'btn btn-outline-warning';
+  chart.data.datasets.forEach(ds => {
+    ds.hidden = mode === 'total' ? !ds.isOverall : ds.isOverall;
+  });
+  chart.update();
+  renderOverviewLegend();
+}
+</script>
 {% endblock %}

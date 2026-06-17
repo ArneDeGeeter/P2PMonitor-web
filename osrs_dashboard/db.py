@@ -267,31 +267,126 @@ def insert_snapshot(conn: sqlite3.Connection, account_id: int, csv_text: str) ->
     conn.commit()
 
 
+def _row_to_snapshot(row: sqlite3.Row) -> dict:
+    snap = {"polled_at": row["polled_at"], "skills": {}}
+    for skill in SKILLS:
+        snap["skills"][skill] = SkillSnapshot(
+            rank=row[f"{skill}_rank"] or -1,
+            level=_xp_to_level(row[f"{skill}_xp"] or 0) if skill != "overall" else 0,
+            xp=row[f"{skill}_xp"] or 0,
+        )
+    if "overall" in snap["skills"]:
+        total_xp = snap["skills"]["overall"].xp
+        snap["skills"]["overall"] = SkillSnapshot(
+            rank=snap["skills"]["overall"].rank,
+            level=sum(
+                _xp_to_level(snap["skills"][s].xp)
+                for s in SKILLS if s != "overall"
+            ),
+            xp=total_xp,
+        )
+    return snap
+
+
 def get_latest_snapshots(conn: sqlite3.Connection, account_id: int, limit: int = 2) -> list[dict]:
     rows = conn.execute(
         "SELECT * FROM hiscore_snapshots WHERE account_id=? ORDER BY polled_at DESC LIMIT ?",
         (account_id, limit),
     ).fetchall()
+    return [_row_to_snapshot(row) for row in rows]
+
+
+def get_snapshot_at_or_before(conn: sqlite3.Connection, account_id: int, dt_str: str) -> Optional[dict]:
+    row = conn.execute(
+        "SELECT * FROM hiscore_snapshots WHERE account_id=? AND polled_at <= ? ORDER BY polled_at DESC LIMIT 1",
+        (account_id, dt_str),
+    ).fetchone()
+    return _row_to_snapshot(row) if row else None
+
+
+def get_earliest_snapshot(conn: sqlite3.Connection, account_id: int) -> Optional[dict]:
+    row = conn.execute(
+        "SELECT * FROM hiscore_snapshots WHERE account_id=? ORDER BY polled_at ASC LIMIT 1",
+        (account_id,),
+    ).fetchone()
+    return _row_to_snapshot(row) if row else None
+
+
+def get_all_accounts_snapshots_for_chart(
+    conn: sqlite3.Connection,
+    since_dt: str,
+    until_dt: Optional[str] = None,
+) -> list[dict]:
+    """
+    Returns an aggregated XP time series across all accounts.
+    For each unique polled_at timestamp (within the range), sums the most recent
+    known XP for every account per skill. Result is ordered by polled_at ASC.
+    """
+    account_ids = [r[0] for r in conn.execute("SELECT id FROM accounts").fetchall()]
+    if not account_ids:
+        return []
+
+    # Per account: fetch baseline (last snapshot before since_dt) + all in range
+    account_series: dict[int, list[tuple[str, dict[str, int]]]] = {}
+    for acc_id in account_ids:
+        rows = []
+        baseline = conn.execute(
+            "SELECT * FROM hiscore_snapshots WHERE account_id=? AND polled_at < ?"
+            " ORDER BY polled_at DESC LIMIT 1",
+            (acc_id, since_dt),
+        ).fetchone()
+        if baseline:
+            rows.append(baseline)
+
+        q = "SELECT * FROM hiscore_snapshots WHERE account_id=? AND polled_at >= ?"
+        params: list = [acc_id, since_dt]
+        if until_dt:
+            q += " AND polled_at <= ?"
+            params.append(until_dt)
+        q += " ORDER BY polled_at ASC"
+        rows.extend(conn.execute(q, params).fetchall())
+
+        account_series[acc_id] = [
+            (r["polled_at"], {s: r[f"{s}_xp"] or 0 for s in SKILLS})
+            for r in rows
+        ]
+
+    # Collect unique timestamps within the requested range only
+    timestamps = sorted({
+        ts
+        for snaps in account_series.values()
+        for ts, _ in snaps
+        if ts >= since_dt and (until_dt is None or ts <= until_dt)
+    })
+    if not timestamps:
+        return []
+
+    # Per-account baseline: first snapshot in our loaded data.
+    # Using the first snapshot (which may be before since_dt) means a newly added account
+    # contributes 0 gained XP at the moment it appears — only subsequent play counts.
+    account_baselines: dict[int, dict[str, int]] = {
+        acc_id: snaps[0][1] if snaps else {s: 0 for s in SKILLS}
+        for acc_id, snaps in account_series.items()
+    }
+
+    # For each timestamp, carry-forward the latest known snapshot per account and sum
     result = []
-    for row in rows:
-        snap = {"polled_at": row["polled_at"], "skills": {}}
-        for skill in SKILLS:
-            snap["skills"][skill] = SkillSnapshot(
-                rank=row[f"{skill}_rank"] or -1,
-                level=_xp_to_level(row[f"{skill}_xp"] or 0) if skill != "overall" else 0,
-                xp=row[f"{skill}_xp"] or 0,
-            )
-        if "overall" in snap["skills"]:
-            total_xp = snap["skills"]["overall"].xp
-            snap["skills"]["overall"] = SkillSnapshot(
-                rank=snap["skills"]["overall"].rank,
-                level=sum(
-                    _xp_to_level(snap["skills"][s].xp)
-                    for s in SKILLS if s != "overall"
-                ),
-                xp=total_xp,
-            )
-        result.append(snap)
+    for ts in timestamps:
+        totals: dict[str, int] = {s: 0 for s in SKILLS}
+        gained: dict[str, int] = {s: 0 for s in SKILLS}
+        for acc_id, snaps in account_series.items():
+            last_skills = None
+            for snap_ts, snap_skills in snaps:
+                if snap_ts <= ts:
+                    last_skills = snap_skills
+                else:
+                    break
+            if last_skills:
+                baseline = account_baselines[acc_id]
+                for s in SKILLS:
+                    totals[s] += last_skills[s]
+                    gained[s] += max(0, last_skills[s] - baseline[s])
+        result.append({"polled_at": ts, "skills": totals, "skills_gained": gained})
     return result
 
 
