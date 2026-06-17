@@ -1,9 +1,41 @@
 import os
 import secrets
+import warnings
 from flask import Flask, session, redirect, url_for
 from .db import open_db, get_or_create_kdf_salt
 from .hiscores import start_poll_loop
 from .bank_watcher import start_bank_watcher
+
+
+def _check_optional_deps() -> None:
+    missing = []
+    try:
+        import pywinctl  # noqa: F401
+    except ImportError:
+        missing.append("pywinctl")
+    try:
+        import mss  # noqa: F401
+    except ImportError:
+        missing.append("mss")
+    try:
+        import pytesseract  # noqa: F401
+        pytesseract.get_tesseract_version()
+    except ImportError:
+        missing.append("pytesseract")
+    except Exception:
+        # pytesseract installed but tesseract binary missing
+        warnings.warn(
+            "tesseract binary not found — bank value OCR disabled. "
+            "Install with: brew install tesseract  |  apt install tesseract-ocr  |  "
+            "choco install tesseract",
+            stacklevel=2,
+        )
+    if missing:
+        warnings.warn(
+            f"Bank screenshot feature missing packages: {', '.join(missing)}. "
+            "Install with: pip install " + " ".join(missing),
+            stacklevel=2,
+        )
 
 
 def create_app(db_path: str = "~/.osrs_dashboard.db", poll_interval: int = 3600) -> Flask:
@@ -12,6 +44,8 @@ def create_app(db_path: str = "~/.osrs_dashboard.db", poll_interval: int = 3600)
     app.config["DB_PATH"] = db_path
     app.config["POLL_INTERVAL"] = poll_interval
     app.config["FERNET"] = None
+
+    _check_optional_deps()
 
     conn = open_db(db_path)
     app.config["DB_CONN"] = conn

@@ -4,3 +4,5 @@ requests>=2.31
 pyotp>=2.9
 Pillow>=10.0
 pytesseract>=0.3.10
+pywinctl>=0.3
+mss>=9.0
