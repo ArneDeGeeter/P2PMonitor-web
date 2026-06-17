@@ -100,6 +100,7 @@
         <tr>
           <th>Account</th>
           <th>State</th>
+          <th>Current Task</th>
           <th>Spent</th>
           <th>Received</th>
           <th>Net</th>
@@ -126,6 +127,13 @@
               <span class="badge" style="background:#d9534f;">Banned</span>
             {% else %}
               <span class="badge" style="background:#f0ad4e; color:#1a1a2e;">Sold</span>
+            {% endif %}
+          </td>
+          <td id="task-{{ acc.id }}">
+            {% if acc.p2p_account %}
+              <span class="text-secondary" style="font-size:0.8rem;">loading…</span>
+            {% else %}
+              <span class="text-secondary">—</span>
             {% endif %}
           </td>
           <td>
@@ -325,5 +333,90 @@ function setChartMode(mode) {
   chart.update();
   renderOverviewLegend();
 }
+
+// ── Live task + runtime for P2P-linked accounts ──────────────────────
+
+// account_id → { runtime_secs, ticking }
+const _taskTimers = {};
+
+function _fmtRuntime(secs) {
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  return [h, m, s].map(v => String(v).padStart(2, '0')).join(':');
+}
+
+function _renderTaskCell(id, d) {
+  const el = document.getElementById('task-' + id);
+  if (!el) return;
+
+  if (d.state === 'unlinked' || !d.log_exists) {
+    el.innerHTML = '<span class="text-secondary">—</span>';
+    return;
+  }
+
+  const stateColors = { start: '#5cb85c', resume: '#5cb85c', pause: '#f0ad4e', stop: '#d9534f' };
+  const stateColor  = stateColors[d.state] || '#a0a0c0';
+  const stateLabel  = { start: 'Running', resume: 'Running', pause: 'Paused', stop: 'Stopped', unknown: 'Unknown' }[d.state] || d.state;
+
+  let taskLine = '';
+  if (d.task) {
+    const detail = d.activity ? ` <span class="text-secondary">– ${d.activity}</span>` : '';
+    taskLine = `<div style="font-size:0.85rem;">${d.task}${detail}</div>`;
+  }
+
+  // Timer span — only tick if running
+  const timerId = 'timer-' + id;
+  const timerHtml = d.runtime_secs != null
+    ? `<span id="${timerId}" style="font-family:monospace; font-size:0.8rem; color:#a0a0c0;">${_fmtRuntime(d.runtime_secs)}</span>`
+    : '';
+
+  el.innerHTML = `
+    <div class="d-flex align-items-center gap-2">
+      <span class="badge" style="background:${stateColor}; font-size:0.7rem;">${stateLabel}</span>
+      ${timerHtml}
+    </div>
+    ${taskLine}`;
+
+  // Start ticking if running
+  if (d.state === 'start' || d.state === 'resume') {
+    if (!_taskTimers[id] || !_taskTimers[id].ticking) {
+      let secs = d.runtime_secs || 0;
+      const timerEl = () => document.getElementById(timerId);
+      const interval = setInterval(() => {
+        const el = timerEl();
+        if (!el) { clearInterval(interval); return; }
+        secs++;
+        el.textContent = _fmtRuntime(secs);
+      }, 1000);
+      _taskTimers[id] = { ticking: true, interval };
+    }
+  } else {
+    // Stop any existing timer
+    if (_taskTimers[id]?.interval) {
+      clearInterval(_taskTimers[id].interval);
+      _taskTimers[id] = { ticking: false };
+    }
+  }
+}
+
+function _loadAllStatuses() {
+  // Find all task cells that need fetching (have 'loading…' text)
+  {% for acc in data.accounts %}
+  {% if acc.p2p_account %}
+  fetch('{{ url_for("p2p.p2p_status", account_id=acc.id) }}')
+    .then(r => r.json())
+    .then(d => _renderTaskCell({{ acc.id }}, d))
+    .catch(() => {
+      const el = document.getElementById('task-{{ acc.id }}');
+      if (el) el.innerHTML = '<span class="text-secondary">—</span>';
+    });
+  {% endif %}
+  {% endfor %}
+}
+
+// Load on page ready, refresh every 30 s
+_loadAllStatuses();
+setInterval(_loadAllStatuses, 30000);
 </script>
 {% endblock %}

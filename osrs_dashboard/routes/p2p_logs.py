@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 from flask import Blueprint, jsonify, current_app
 from ..db import get_account
@@ -84,6 +85,87 @@ def p2p_logs(account_id: int):
         "log_exists": exists,
         "events": enriched,
     })
+
+
+def get_p2p_status(p2p_account: str) -> dict:
+    """
+    Scan history.jsonl from the end to determine:
+      - current task (most recent 'task' event)
+      - script state: start / stop / pause / resume / unknown
+      - session start time (most recent start or resume before any stop/pause)
+      - runtime_secs since that start (only when script is running)
+    """
+    path = P2P_BASE / p2p_account / "history.jsonl"
+    if not path.exists():
+        return {"state": "unknown", "task": None, "activity": None,
+                "session_start": None, "runtime_secs": None, "log_exists": False}
+
+    # Read all non-scan events into memory (file is typically small)
+    events = []
+    with open(path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                e = json.loads(line)
+                if e.get("type") != "scan":
+                    events.append(e)
+            except json.JSONDecodeError:
+                continue
+
+    current_task = None
+    current_activity = None
+    script_state = "unknown"
+    session_start_str = None
+
+    # Walk backwards through events
+    for e in reversed(events):
+        etype  = e.get("type", "")
+        evalue = (e.get("value") or "").lower()
+        etime  = e.get("time", "")
+
+        # Grab the most recent task name
+        if current_task is None and etype == "task":
+            current_task     = e.get("value")
+            current_activity = e.get("activity")
+
+        # Determine script state from the most recent script_event
+        if etype == "script_event":
+            if script_state == "unknown":
+                script_state = evalue  # first (most recent) script_event sets state
+
+            # Walk back further to find when the current run started
+            if evalue in ("start", "resume") and session_start_str is None:
+                session_start_str = etime
+                break  # we have everything we need
+            elif evalue in ("stop", "pause"):
+                break  # script stopped before this; no active session
+
+    runtime_secs = None
+    if script_state in ("start", "resume") and session_start_str:
+        try:
+            started = datetime.strptime(session_start_str, "%Y-%m-%d %H:%M:%S")
+            runtime_secs = max(0, int((datetime.now() - started).total_seconds()))
+        except ValueError:
+            pass
+
+    return {
+        "state":         script_state,
+        "task":          current_task,
+        "activity":      current_activity,
+        "session_start": session_start_str,
+        "runtime_secs":  runtime_secs,
+        "log_exists":    True,
+    }
+
+
+@p2p_bp.get("/accounts/<int:account_id>/p2p-status")
+def p2p_status(account_id: int):
+    row = get_account(_conn(), account_id)
+    if not row or not row["p2p_account"]:
+        return jsonify({"state": "unlinked"})
+    return jsonify(get_p2p_status(row["p2p_account"]))
 
 
 @p2p_bp.get("/p2p-accounts")

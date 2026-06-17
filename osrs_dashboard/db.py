@@ -476,7 +476,7 @@ def list_expenses(conn: sqlite3.Connection, account_id: int) -> list[Expense]:
 
 def get_financial_overview(conn: sqlite3.Connection) -> dict:
     accounts = conn.execute(
-        "SELECT id, username, state FROM accounts ORDER BY username"
+        "SELECT id, username, state, p2p_account FROM accounts ORDER BY username"
     ).fetchall()
 
     currencies = ["GBP", "USD", "EUR", "GP"]
@@ -488,6 +488,7 @@ def get_financial_overview(conn: sqlite3.Connection) -> dict:
             "id": acc["id"],
             "username": acc["username"],
             "state": acc["state"] or "running",
+            "p2p_account": acc["p2p_account"],
             "by_currency": {},
         }
         for cur in currencies:
