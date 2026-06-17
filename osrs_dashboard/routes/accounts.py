@@ -79,6 +79,7 @@ def add_account_post():
         totp_secret=f.get("totp_secret", "").strip() or None,
         proxy_url=f.get("proxy_url", "").strip() or None,
         state=f.get("state", "running"),
+        p2p_account=f.get("p2p_account", "").strip() or None,
         notes=f.get("notes", "").strip() or None,
     )
     flash("Account added.", "success")
@@ -189,6 +190,7 @@ def edit_account_post(account_id: int):
         totp_secret=f.get("totp_secret", "").strip() or None,
         proxy_url=f.get("proxy_url", "").strip() or None,
         state=f.get("state", "running"),
+        p2p_account=f.get("p2p_account", "").strip() or None,
         notes=f.get("notes", "").strip() or None,
     )
     flash("Account updated.", "success")

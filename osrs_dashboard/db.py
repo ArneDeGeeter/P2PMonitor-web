@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     totp_secret    BLOB,
     proxy_url      BLOB,
     state          TEXT NOT NULL DEFAULT 'running',
+    p2p_account    TEXT,
     created_at     TEXT NOT NULL DEFAULT (datetime('now')),
     notes          TEXT
 );
@@ -64,6 +65,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     acct_cols = {r[1] for r in conn.execute("PRAGMA table_info(accounts)").fetchall()}
     if "state" not in acct_cols:
         conn.execute("ALTER TABLE accounts ADD COLUMN state TEXT NOT NULL DEFAULT 'running'")
+    if "p2p_account" not in acct_cols:
+        conn.execute("ALTER TABLE accounts ADD COLUMN p2p_account TEXT")
     exp_cols = {r[1] for r in conn.execute("PRAGMA table_info(expenses)").fetchall()}
     if "type" not in exp_cols:
         conn.execute("ALTER TABLE expenses ADD COLUMN type TEXT NOT NULL DEFAULT 'expense'")
@@ -116,12 +119,13 @@ def insert_account(
     totp_secret: Optional[str] = None,
     proxy_url: Optional[str] = None,
     state: str = "running",
+    p2p_account: Optional[str] = None,
     notes: Optional[str] = None,
 ) -> int:
     cur = conn.execute(
         """INSERT INTO accounts
-           (username, login_email, password, bank_pin, totp_secret, proxy_url, state, notes)
-           VALUES (?,?,?,?,?,?,?,?)""",
+           (username, login_email, password, bank_pin, totp_secret, proxy_url, state, p2p_account, notes)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
         (
             username,
             _enc(fernet, login_email),
@@ -130,6 +134,7 @@ def insert_account(
             _enc(fernet, totp_secret),
             _enc(fernet, proxy_url),
             state if state in VALID_STATES else "running",
+            p2p_account or None,
             notes,
         ),
     )
@@ -148,12 +153,13 @@ def update_account(
     totp_secret: Optional[str] = None,
     proxy_url: Optional[str] = None,
     state: str = "running",
+    p2p_account: Optional[str] = None,
     notes: Optional[str] = None,
 ) -> None:
     conn.execute(
         """UPDATE accounts SET
            username=?, login_email=?, password=?, bank_pin=?,
-           totp_secret=?, proxy_url=?, state=?, notes=?
+           totp_secret=?, proxy_url=?, state=?, p2p_account=?, notes=?
            WHERE id=?""",
         (
             username,
@@ -163,6 +169,7 @@ def update_account(
             _enc(fernet, totp_secret),
             _enc(fernet, proxy_url),
             state if state in VALID_STATES else "running",
+            p2p_account or None,
             notes,
             account_id,
         ),
@@ -237,6 +244,7 @@ def get_account_secrets(conn: sqlite3.Connection, fernet: Fernet, account_id: in
         "bank_pin": _dec(fernet, row["bank_pin"]),
         "totp_secret": _dec(fernet, row["totp_secret"]),
         "proxy_url": _dec(fernet, row["proxy_url"]),
+        "p2p_account": row["p2p_account"],
         "notes": row["notes"],
     }
 

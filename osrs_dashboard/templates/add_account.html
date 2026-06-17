@@ -66,12 +66,21 @@
             </div>
           </div>
 
-          <div class="mb-3">
-            <label class="form-label">Proxy URL</label>
-            <input type="text" name="proxy_url" class="form-control"
-                   value="{{ account.proxy_url if account else '' }}"
-                   placeholder="socks5://user:pass@host:port or http://host:port">
-            <div class="form-text text-secondary">Optional. Used when fetching hiscores for this account.</div>
+          <div class="row">
+            <div class="col-md-6 mb-3">
+              <label class="form-label">Proxy URL</label>
+              <input type="text" name="proxy_url" class="form-control"
+                     value="{{ account.proxy_url if account else '' }}"
+                     placeholder="socks5://user:pass@host:port or http://host:port">
+              <div class="form-text text-secondary">Optional. Used when fetching hiscores.</div>
+            </div>
+            <div class="col-md-6 mb-3">
+              <label class="form-label">P2P Monitor Account Name</label>
+              <input type="text" name="p2p_account" class="form-control" id="p2p_account_field"
+                     value="{{ row['p2p_account'] if row and row['p2p_account'] else '' }}"
+                     placeholder="Folder name in ~/.p2p_monitor/history/" autocomplete="off">
+              <div class="form-text text-secondary">Links this account to P2P Monitor logs.</div>
+            </div>
           </div>
 
           <div class="row">
@@ -105,6 +114,15 @@
 {% endblock %}
 {% block scripts %}
 <script>
+// Populate datalist for P2P Monitor account names
+fetch('/p2p-accounts').then(r => r.json()).then(names => {
+  const dl = document.createElement('datalist');
+  dl.id = 'p2p-names';
+  names.forEach(n => { const o = document.createElement('option'); o.value = n; dl.appendChild(o); });
+  document.body.appendChild(dl);
+  document.getElementById('p2p_account_field').setAttribute('list', 'p2p-names');
+});
+
 function togglePw(fieldId, btn) {
   const f = document.getElementById(fieldId);
   if (f.type === 'password') {

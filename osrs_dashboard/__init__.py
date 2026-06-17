@@ -22,11 +22,13 @@ def create_app(db_path: str = "~/.osrs_dashboard.db", poll_interval: int = 3600)
     from .routes.expenses import expenses_bp
     from .routes.hiscores_routes import hiscores_bp
     from .routes.overview import overview_bp
+    from .routes.p2p_logs import p2p_bp
 
     app.register_blueprint(accounts_bp)
     app.register_blueprint(expenses_bp)
     app.register_blueprint(hiscores_bp)
     app.register_blueprint(overview_bp)
+    app.register_blueprint(p2p_bp)
 
     @app.before_request
     def require_unlock():

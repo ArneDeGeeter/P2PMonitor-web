@@ -112,6 +112,12 @@
   <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#chart-tab">
     <i class="bi bi-graph-up"></i> XP Chart
   </button></li>
+  {% if row['p2p_account'] %}
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#p2p-tab" id="p2p-tab-btn"
+      onclick="loadP2PLogs()">
+    <i class="bi bi-journal-text"></i> P2P Logs
+  </button></li>
+  {% endif %}
 </ul>
 
 <div class="tab-content">
@@ -310,6 +316,25 @@
       </div>
     </div>
   </div>
+
+  <!-- P2P Logs tab -->
+  {% if row['p2p_account'] %}
+  <div class="tab-pane fade" id="p2p-tab">
+    <div class="card">
+      <div class="card-header d-flex align-items-center gap-2">
+        <i class="bi bi-journal-text me-1"></i>P2P Monitor — <span class="text-warning">{{ row['p2p_account'] }}</span>
+        <button class="btn btn-sm btn-outline-info ms-auto" onclick="loadP2PLogs(true)">
+          <i class="bi bi-arrow-clockwise"></i> Refresh
+        </button>
+      </div>
+      <div class="card-body p-0" id="p2p-body">
+        <div class="text-center py-4 text-secondary">
+          <i class="bi bi-hourglass-split"></i> Loading logs…
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
 
   <!-- XP Chart tab -->
   <div class="tab-pane fade" id="chart-tab">
@@ -585,5 +610,67 @@ function updatePollStatus() {
 }
 updatePollStatus();
 setInterval(updatePollStatus, 30000);
+
+// ── P2P Monitor log viewer ──────────────────────────────────────────
+{% if row['p2p_account'] %}
+let _p2pLoaded = false;
+
+function loadP2PLogs(force) {
+  if (_p2pLoaded && !force) return;
+  _p2pLoaded = true;
+  const body = document.getElementById('p2p-body');
+  body.innerHTML = '<div class="text-center py-4 text-secondary"><i class="bi bi-hourglass-split"></i> Loading…</div>';
+
+  fetch('{{ url_for("p2p.p2p_logs", account_id=account_id) }}')
+    .then(r => r.json())
+    .then(d => {
+      if (d.error && !d.events.length) {
+        body.innerHTML = `<div class="text-center py-4 text-secondary">${escHtml(d.error)}</div>`;
+        return;
+      }
+      if (!d.log_exists) {
+        body.innerHTML = `<div class="text-center py-4 text-secondary">
+          Log file not found:<br><code style="color:#a0a0c0;">${escHtml(d.log_path)}</code></div>`;
+        return;
+      }
+      if (!d.events.length) {
+        body.innerHTML = '<div class="text-center py-4 text-secondary">No events in log yet.</div>';
+        return;
+      }
+
+      const typeLabels = {
+        script_event: 'Script', levelup: 'Level Up', drop: 'Drop',
+        death: 'Death', error: 'Error', task: 'Task',
+        slayer_task: 'Slayer', slayer_complete: 'Slayer Done',
+        slayer_skip: 'Slayer Skip', quest: 'Quest',
+        quest_started: 'Quest', chat: 'Chat',
+      };
+
+      let rows = d.events.map(e => {
+        const label = typeLabels[e.type] || e.type;
+        const detail = [e.value, e.activity].filter(Boolean).join(' — ');
+        return `<tr>
+          <td class="text-secondary" style="white-space:nowrap;font-size:0.8rem;">${escHtml(e.time)}</td>
+          <td><span style="color:${e.color};"><i class="bi ${e.icon}"></i> ${escHtml(label)}</span></td>
+          <td>${escHtml(detail)}</td>
+        </tr>`;
+      }).join('');
+
+      body.innerHTML = `
+        <div class="px-3 py-2" style="font-size:0.8rem; color:#a0a0c0;">
+          Showing last ${d.events.length} events from <code style="color:#c8a951;">${escHtml(d.log_path)}</code>
+        </div>
+        <div style="max-height:500px; overflow-y:auto;">
+          <table class="table table-hover mb-0" style="font-size:0.88rem;">
+            <thead><tr><th>Time</th><th>Type</th><th>Detail</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>`;
+    })
+    .catch(() => {
+      body.innerHTML = '<div class="text-center py-4 text-danger">Failed to load logs.</div>';
+    });
+}
+{% endif %}
 </script>
 {% endblock %}
