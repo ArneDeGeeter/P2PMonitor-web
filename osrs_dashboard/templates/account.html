@@ -801,8 +801,9 @@ function showWindowDebug(btn) {
     return;
   }
   panel.style.display = '';
-  content.textContent = 'Loading…';
+  content.innerHTML = 'Loading…';
 
+  // Step 1: window detection
   fetch('{{ url_for("bank.scan_debug") }}')
     .then(r => r.json())
     .then(d => {
@@ -812,21 +813,71 @@ function showWindowDebug(btn) {
       if (matched.length) {
         html += '<strong style="color:#5cb85c;">Matched DreamBot windows:</strong><ul class="mb-2">';
         matched.forEach(w => {
-          html += `<li><code>${escHtml(w.title)}</code> → account: <strong>${escHtml(w.account_name)}</strong></li>`;
+          html += `<li><code>${escHtml(w.title)}</code> → account name parsed as: <strong>${escHtml(w.account_name)}</strong></li>`;
         });
         html += '</ul>';
       } else {
-        html += '<strong style="color:#d9534f;">No DreamBot windows detected.</strong><br>';
-        html += '<small>Make sure DreamBot is open, not minimised, and "DreamBot" appears in the window title.</small><br><br>';
+        html += '<strong style="color:#d9534f;">No DreamBot windows found.</strong> Make sure DreamBot is open and not minimised.<br><br>';
       }
 
-      html += `<details><summary style="cursor:pointer; color:#a0a0c0;">All visible window titles (${d.all_titles.length})</summary><ul class="mt-1">`;
+      html += `<details><summary style="cursor:pointer;color:#a0a0c0;">All visible window titles (${d.all_titles.length})</summary><ul class="mt-1" style="font-size:0.75rem;">`;
       d.all_titles.forEach(t => { html += `<li><code>${escHtml(t)}</code></li>`; });
       html += '</ul></details>';
 
-      content.innerHTML = html;
+      // Step 2: OCR debug (only if a window was found)
+      if (matched.length) {
+        html += '<hr style="border-color:#2a2a4a;"><strong>OCR diagnostics</strong> <small class="text-secondary">(capturing window now…)</small>';
+        content.innerHTML = html;
+
+        fetch('{{ url_for("bank.ocr_debug_route", account_id=account_id) }}')
+          .then(r => r.json())
+          .then(ocr => {
+            if (ocr.error) {
+              html += `<br><span style="color:#d9534f;">${escHtml(ocr.error)}</span>`;
+              content.innerHTML = html;
+              return;
+            }
+
+            html += '<br>';
+            // Full captured image
+            if (ocr.full_img) {
+              html += `<div class="mb-2"><small class="text-secondary">Full captured window:</small><br>
+                <img src="data:image/png;base64,${ocr.full_img}" style="max-width:100%;border:1px solid #2a2a4a;"></div>`;
+            }
+
+            // Per-attempt results
+            const attempts = ocr.attempts || [];
+            const success = attempts.find(a => a.success);
+            if (success) {
+              html += `<span style="color:#5cb85c;">✓ OCR succeeded</span> on crop <strong>${escHtml(success.crop)}</strong> PSM ${success.psm}`;
+              html += `<br>Values: ${JSON.stringify(success.values)}`;
+            } else {
+              html += `<span style="color:#d9534f;">✗ OCR found no Total value in any crop/PSM combination.</span><br>`;
+              html += '<details open><summary style="cursor:pointer;color:#a0a0c0;">All attempts</summary>';
+              attempts.forEach(a => {
+                html += `<div class="mb-2 mt-1"><strong>${escHtml(a.crop)} PSM ${a.psm || '?'}</strong>`;
+                if (a.error) {
+                  html += ` — <span style="color:#d9534f;">${escHtml(a.error)}</span>`;
+                } else {
+                  if (a.crop_img) html += `<br><img src="data:image/png;base64,${a.crop_img}" style="max-width:50%;border:1px solid #2a2a4a;">`;
+                  html += `<pre style="font-size:0.7rem;color:#c8a951;background:#0f1a30;padding:6px;white-space:pre-wrap;">${escHtml(a.text || '(empty)')}</pre>`;
+                }
+                html += '</div>';
+              });
+              html += '</details>';
+            }
+
+            content.innerHTML = html;
+          })
+          .catch(e => {
+            html += `<br><span style="color:#d9534f;">OCR debug request failed: ${e}</span>`;
+            content.innerHTML = html;
+          });
+      } else {
+        content.innerHTML = html;
+      }
     })
-    .catch(e => { content.textContent = 'Failed: ' + e; });
+    .catch(e => { content.innerHTML = 'Failed: ' + e; });
 }
 
 function updateBankScanStatus() {

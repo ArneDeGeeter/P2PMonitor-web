@@ -53,62 +53,130 @@ def _parse_gp(text: str) -> Optional[int]:
 
 # ── OCR ─────────────────────────────────────────────────────────────
 
+def _prepare_crops(img):
+    """
+    Yield (label, image) pairs to try for OCR, from most specific to full image.
+    The DreamBot paint is white text on a dark overlay in the bottom-left,
+    but exact position varies by script and window scaling.
+    """
+    w, h = img.size
+    # 1. Bottom-left third — where P2P Master AI puts Output/Input/Total
+    yield "bottom-left-third", img.crop((0, h * 2 // 3, w // 2, h))
+    # 2. Bottom-left half — wider vertical range
+    yield "bottom-left-half",  img.crop((0, h // 2,     w // 2, h))
+    # 3. Left half of the full window — catches any vertical position
+    yield "left-half",         img.crop((0, 0,           w // 2, h))
+    # 4. Full image — last resort
+    yield "full",              img
+
+
+def _process_crop(crop):
+    """Invert (white text on dark → dark text on light) and upscale 3×."""
+    from PIL import ImageOps, ImageFilter
+    gray     = crop.convert("L")
+    inverted = ImageOps.invert(gray)
+    # Sharpen before upscaling helps pixel fonts
+    sharpened = inverted.filter(ImageFilter.SHARPEN)
+    return sharpened.resize((sharpened.width * 3, sharpened.height * 3), resample=0)
+
+
+def _extract_values(text: str) -> dict:
+    result: dict = {}
+    for line in text.splitlines():
+        line = line.strip()
+        m = re.search(r"[Oo0]utput\s*[:\s]\s*([0-9.,]+\s*[KMBkmb]?)", line)
+        if m and "output_gp" not in result:
+            result["output_gp"] = _parse_gp(m.group(1))
+        m = re.search(r"[Ii1]nput\s*[:\s]\s*([0-9.,]+\s*[KMBkmb]?)", line)
+        if m and "input_gp" not in result:
+            result["input_gp"] = _parse_gp(m.group(1))
+        # "Total: 51.3M" or "T0tal: ..." (OCR typo)
+        m = re.search(r"[Tt][Oo0]tal\s*[:\s]\s*([0-9.,]+\s*[KMBkmb]?)", line)
+        if m and "total_gp" not in result:
+            result["total_gp"] = _parse_gp(m.group(1))
+    return result
+
+
 def _ocr_image(img) -> Optional[dict]:
-    """
-    Crop to the bottom-left area of the DreamBot window (where the script
-    paint lives), invert + upscale for better tesseract accuracy, then
-    extract Output / Input / Total values.
-    """
+    """Try progressively broader crops until we find Output/Input/Total values."""
     try:
-        from PIL import ImageOps
         import pytesseract
     except ImportError:
         return None
 
+    # PSM 6 = uniform block of text; PSM 4 = single column; PSM 11 = sparse text
+    psm_modes = ["6", "4", "11"]
+
+    for label, crop in _prepare_crops(img):
+        try:
+            processed = _process_crop(crop)
+        except Exception as exc:
+            log.debug("Crop processing failed (%s): %s", label, exc)
+            continue
+
+        for psm in psm_modes:
+            try:
+                text = pytesseract.image_to_string(
+                    processed,
+                    config=f"--psm {psm} --oem 1",
+                )
+            except Exception as exc:
+                log.debug("Tesseract failed (crop=%s psm=%s): %s", label, psm, exc)
+                continue
+
+            result = _extract_values(text)
+            if result.get("total_gp"):
+                log.debug("OCR success: crop=%s psm=%s  values=%s", label, psm, result)
+                return result
+
+    log.debug("OCR found nothing in any crop/PSM combination")
+    return None
+
+
+def ocr_debug(img) -> dict:
+    """
+    Run OCR on every crop+PSM combination and return full diagnostics.
+    Used by the debug route — never called in the normal scan loop.
+    """
+    import base64, io
     try:
-        w, h = img.size
+        import pytesseract
+    except ImportError:
+        return {"error": "pytesseract not installed"}
 
-        # Title bar is ~28 px; game canvas is below.
-        # Paint overlay sits in the bottom-left quarter of the game canvas.
-        title_h = 28
-        game_h = h - title_h
-        crop = img.crop((0, title_h + game_h // 2, w // 2, h))
+    def img_to_b64(i):
+        buf = io.BytesIO()
+        i.save(buf, format="PNG")
+        return base64.b64encode(buf.getvalue()).decode()
 
-        gray = crop.convert("L")
-        inverted = ImageOps.invert(gray)
-        # 3× upscale — big wins for small pixel fonts
-        big = inverted.resize((inverted.width * 3, inverted.height * 3))
+    attempts = []
+    for label, crop in _prepare_crops(img):
+        try:
+            processed = _process_crop(crop)
+        except Exception as exc:
+            attempts.append({"crop": label, "error": str(exc)})
+            continue
 
-        text = pytesseract.image_to_string(
-            big,
-            config=(
-                "--psm 6 "
-                "-c tessedit_char_whitelist="
-                "0123456789KMBkmb.,+- "
-                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz:"
-            ),
-        )
-    except Exception as exc:
-        log.debug("OCR error: %s", exc)
-        return None
+        for psm in ["6", "4", "11"]:
+            try:
+                text = pytesseract.image_to_string(processed, config=f"--psm {psm} --oem 1")
+            except Exception as exc:
+                attempts.append({"crop": label, "psm": psm, "error": str(exc)})
+                continue
 
-    result: dict = {}
-    for line in text.splitlines():
-        line = line.strip()
-        m = re.search(r"[Oo]utput\s*:?\s*([0-9.,]+[KMBkmb]?)", line)
-        if m and "output_gp" not in result:
-            result["output_gp"] = _parse_gp(m.group(1))
+            values = _extract_values(text)
+            attempts.append({
+                "crop":     label,
+                "psm":      psm,
+                "text":     text.strip(),
+                "values":   values,
+                "success":  bool(values.get("total_gp")),
+                "crop_img": img_to_b64(crop),
+            })
+            if values.get("total_gp"):
+                break  # found it — no need to try more PSMs for this crop
 
-        m = re.search(r"[Ii]nput\s*:?\s*([0-9.,]+[KMBkmb]?)", line)
-        if m and "input_gp" not in result:
-            result["input_gp"] = _parse_gp(m.group(1))
-
-        # "Total: 51.3M +1.9M" — capture first number (absolute)
-        m = re.search(r"[Tt]otal\s*:?\s*([0-9.,]+[KMBkmb]?)", line)
-        if m and "total_gp" not in result:
-            result["total_gp"] = _parse_gp(m.group(1))
-
-    return result if result.get("total_gp") else None
+    return {"attempts": attempts, "full_img": img_to_b64(img)}
 
 
 # ── Scan state ──────────────────────────────────────────────────────

@@ -2,8 +2,8 @@ from flask import Blueprint, jsonify, request, redirect, url_for, flash, current
 from ..db import (
     get_account, insert_bank_snapshot, list_bank_snapshots, delete_bank_snapshot,
 )
-from ..bank_watcher import scan_account, scan_status
-from ..screenshotter import list_all_window_titles, list_dreambot_windows
+from ..bank_watcher import scan_account, scan_status, ocr_debug
+from ..screenshotter import list_all_window_titles, list_dreambot_windows, capture_region
 
 bank_bp = Blueprint("bank", __name__)
 
@@ -112,3 +112,28 @@ def scan_debug():
             for w in matched
         ],
     })
+
+
+@bank_bp.get("/accounts/<int:account_id>/bank-ocr-debug")
+def ocr_debug_route(account_id: int):
+    """Capture the window and return full OCR diagnostics (images + raw text per crop/PSM)."""
+    from ..db import get_account
+    row = get_account(current_app.config["DB_CONN"], account_id)
+    if not row or not row["p2p_account"]:
+        return jsonify({"error": "No P2P Monitor account linked."})
+
+    target = row["p2p_account"].lower()
+    windows = list_dreambot_windows()
+    win = next((w for w in windows if w["account_name"].lower() == target), None)
+    if win is None:
+        all_titles = list_all_window_titles()
+        return jsonify({
+            "error": f"Window for '{row['p2p_account']}' not found.",
+            "all_titles": all_titles,
+        })
+
+    img = capture_region(win["left"], win["top"], win["width"], win["height"])
+    if img is None:
+        return jsonify({"error": "Screen capture failed."})
+
+    return jsonify(ocr_debug(img))
