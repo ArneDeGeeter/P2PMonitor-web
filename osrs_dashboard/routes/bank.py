@@ -3,7 +3,7 @@ from ..db import (
     get_account, insert_bank_snapshot, list_bank_snapshots, delete_bank_snapshot,
 )
 from ..bank_watcher import scan_account, scan_status, ocr_debug
-from ..screenshotter import list_all_window_titles, list_dreambot_windows, capture_region
+from ..screenshotter import list_all_window_titles, list_dreambot_windows, capture_window
 
 bank_bp = Blueprint("bank", __name__)
 
@@ -132,7 +132,7 @@ def ocr_debug_route(account_id: int):
             "all_titles": all_titles,
         })
 
-    img = capture_region(win["left"], win["top"], win["width"], win["height"])
+    img = capture_window(win)
     if img is None:
         return jsonify({"error": "Screen capture failed."})
 

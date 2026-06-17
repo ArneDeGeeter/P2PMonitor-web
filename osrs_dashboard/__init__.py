@@ -1,41 +1,34 @@
 import os
 import secrets
-import warnings
-from flask import Flask, session, redirect, url_for
+from flask import Flask, redirect, url_for
 from .db import open_db, get_or_create_kdf_salt
 from .hiscores import start_poll_loop
 from .bank_watcher import start_bank_watcher
 
 
-def _check_optional_deps() -> None:
-    missing = []
-    try:
-        import pywinctl  # noqa: F401
-    except ImportError:
-        missing.append("pywinctl")
-    try:
-        import mss  # noqa: F401
-    except ImportError:
-        missing.append("mss")
-    try:
-        import pytesseract  # noqa: F401
-        pytesseract.get_tesseract_version()
-    except ImportError:
-        missing.append("pytesseract")
-    except Exception:
-        # pytesseract installed but tesseract binary missing
-        warnings.warn(
-            "tesseract binary not found — bank value OCR disabled. "
-            "Install with: brew install tesseract  |  apt install tesseract-ocr  |  "
-            "choco install tesseract",
-            stacklevel=2,
-        )
-    if missing:
-        warnings.warn(
-            f"Bank screenshot feature missing packages: {', '.join(missing)}. "
-            "Install with: pip install " + " ".join(missing),
-            stacklevel=2,
-        )
+def _print_capabilities() -> None:
+    from .screenshotter import detect_capabilities
+    cap = detect_capabilities()
+
+    tick  = "\033[32m✓\033[0m"
+    cross = "\033[31m✗\033[0m"
+    warn  = "\033[33m⚠\033[0m"
+
+    bg    = tick if cap["capture_bg_safe"] else warn
+    ocr_ok = not cap["ocr"].startswith("unavailable")
+    win_ok = cap["window_listing"] != "unavailable"
+
+    print()
+    print("\033[1;33m── OSRS Dashboard — Bank Screenshot ──────────────────\033[0m")
+    print(f"  Window listing  : {tick if win_ok else cross} {cap['window_listing']}")
+    print(f"  Capture method  : {bg} {cap['capture_method']}")
+    print(f"  OCR             : {tick if ocr_ok else cross} {cap['ocr']}")
+    if cap["warnings"]:
+        print()
+        for w in cap["warnings"]:
+            print(f"  \033[33m⚠\033[0m  {w}")
+    print("\033[1;33m──────────────────────────────────────────────────────\033[0m")
+    print()
 
 
 def create_app(db_path: str = "~/.osrs_dashboard.db", poll_interval: int = 3600) -> Flask:
@@ -45,7 +38,7 @@ def create_app(db_path: str = "~/.osrs_dashboard.db", poll_interval: int = 3600)
     app.config["POLL_INTERVAL"] = poll_interval
     app.config["FERNET"] = None
 
-    _check_optional_deps()
+    _print_capabilities()
 
     conn = open_db(db_path)
     app.config["DB_CONN"] = conn

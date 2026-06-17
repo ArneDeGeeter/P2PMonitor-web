@@ -25,7 +25,7 @@ from datetime import datetime
 from typing import Optional
 
 from . import db as _db
-from .screenshotter import list_dreambot_windows, capture_region
+from .screenshotter import list_dreambot_windows, capture_window
 
 log = logging.getLogger(__name__)
 
@@ -218,7 +218,7 @@ def scan_account(conn, account_id: int) -> dict:
     if win is None:
         return {"ok": False, "total_gp": None, "error": f"DreamBot window for '{row['p2p_account']}' not found (is it open and not minimised?)."}
 
-    img = capture_region(win["left"], win["top"], win["width"], win["height"])
+    img = capture_window(win)
     if img is None:
         return {"ok": False, "total_gp": None, "error": "Screen capture failed. Check screen recording permissions."}
 
@@ -272,7 +272,7 @@ def _scan_once(conn) -> None:
         if account_id is None:
             continue
 
-        img = capture_region(win["left"], win["top"], win["width"], win["height"])
+        img = capture_window(win)
         if img is None:
             continue
 

@@ -6,3 +6,6 @@ Pillow>=10.0
 pytesseract>=0.3.10
 pywinctl>=0.3
 mss>=9.0
+
+# macOS background window capture (optional but recommended on macOS)
+# pip install pyobjc-framework-Quartz
