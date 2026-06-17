@@ -112,6 +112,10 @@
   <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#chart-tab">
     <i class="bi bi-graph-up"></i> XP Chart
   </button></li>
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#bank-tab" id="bank-tab-btn"
+      onclick="loadBankChart()">
+    <i class="bi bi-bank"></i> Bank
+  </button></li>
   {% if row['p2p_account'] %}
   <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#p2p-tab" id="p2p-tab-btn"
       onclick="loadP2PLogs()">
@@ -313,6 +317,67 @@
       <div class="card-header">Account Credentials</div>
       <div class="card-body" id="creds-body">
         <p class="text-secondary">Loading...</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bank Value tab -->
+  <div class="tab-pane fade" id="bank-tab">
+    <!-- Manual entry -->
+    <div class="card mb-3">
+      <div class="card-header">Add Bank Snapshot</div>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('bank.add_bank_snapshot', account_id=account_id) }}">
+          <div class="row g-2 align-items-end">
+            <div class="col-md-3">
+              <label class="form-label form-label-sm">Bank Total (GP)</label>
+              <input type="text" name="total_gp" class="form-control form-control-sm"
+                     placeholder="e.g. 51300000" required>
+            </div>
+            <div class="col-md-2">
+              <label class="form-label form-label-sm">Output (GP, optional)</label>
+              <input type="text" name="output_gp" class="form-control form-control-sm" placeholder="e.g. 2040000">
+            </div>
+            <div class="col-md-2">
+              <label class="form-label form-label-sm">Input (GP, optional)</label>
+              <input type="text" name="input_gp" class="form-control form-control-sm" placeholder="e.g. 104000">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label form-label-sm">Date &amp; Time</label>
+              <input type="datetime-local" name="recorded_at" class="form-control form-control-sm"
+                     id="bank-datetime">
+            </div>
+            <div class="col-md-2">
+              <button type="submit" class="btn btn-osrs btn-sm w-100">Add</button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Chart -->
+    <div class="card mb-3">
+      <div class="card-body">
+        <canvas id="bankChart" height="80"></canvas>
+        <p id="bankChartEmpty" class="text-secondary text-center py-4" style="display:none;">
+          No bank snapshots yet.
+          {% if row['p2p_account'] %}
+          Screenshots are scanned automatically every 60 s from
+          <code style="color:#a0a0c0;">~/.p2p_monitor/screenshots/</code>.
+          {% endif %}
+        </p>
+      </div>
+    </div>
+
+    <!-- Snapshot table -->
+    <div class="card" id="bank-table-card" style="display:none;">
+      <div class="card-body p-0">
+        <div style="max-height:300px; overflow-y:auto;">
+          <table class="table table-hover mb-0" style="font-size:0.85rem;">
+            <thead><tr><th>Time</th><th>Total</th><th>Output</th><th>Input</th><th>Source</th><th></th></tr></thead>
+            <tbody id="bank-table-body"></tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>
@@ -610,6 +675,100 @@ function updatePollStatus() {
 }
 updatePollStatus();
 setInterval(updatePollStatus, 30000);
+
+// ── Bank value chart ────────────────────────────────────────────────
+let _bankLoaded = false;
+let _bankChart = null;
+
+function fmtGp(v) {
+  if (v == null) return '—';
+  if (v >= 1e9) return (v/1e9).toFixed(2) + 'B';
+  if (v >= 1e6) return (v/1e6).toFixed(2) + 'M';
+  if (v >= 1e3) return (v/1e3).toFixed(1) + 'K';
+  return v.toLocaleString();
+}
+
+function loadBankChart(force) {
+  if (_bankLoaded && !force) return;
+  _bankLoaded = true;
+
+  // Pre-fill datetime input to now
+  const dtEl = document.getElementById('bank-datetime');
+  if (dtEl && !dtEl.value) {
+    const now = new Date();
+    dtEl.value = now.toISOString().slice(0, 16);
+  }
+
+  fetch('{{ url_for("bank.bank_chart_data", account_id=account_id) }}')
+    .then(r => r.json())
+    .then(d => {
+      const empty = document.getElementById('bankChartEmpty');
+      const tableCard = document.getElementById('bank-table-card');
+
+      if (!d.labels.length) {
+        empty.style.display = '';
+        return;
+      }
+      empty.style.display = 'none';
+
+      const datasets = d.datasets.map(ds => ({
+        ...ds,
+        tension: 0,
+        pointRadius: 3,
+        borderWidth: ds.label === 'Bank Total' ? 2.5 : 1.5,
+        fill: ds.label === 'Bank Total',
+      }));
+
+      if (_bankChart) _bankChart.destroy();
+      _bankChart = new Chart(document.getElementById('bankChart'), {
+        type: 'line',
+        data: { labels: d.labels, datasets },
+        options: {
+          responsive: true,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { labels: { color: '#e0e0e0' } },
+            tooltip: {
+              callbacks: {
+                label: ctx => ` ${ctx.dataset.label}: ${fmtGp(ctx.parsed.y)} gp`
+              }
+            }
+          },
+          scales: {
+            x: { ticks: { color: '#a0a0c0', maxTicksLimit: 10 }, grid: { color: '#2a2a4a' } },
+            y: {
+              ticks: {
+                color: '#a0a0c0',
+                callback: v => fmtGp(v)
+              },
+              grid: { color: '#2a2a4a' }
+            }
+          }
+        }
+      });
+
+      // Build snapshot table from the Total XP dataset (index 0 = Bank Total)
+      const totalDs = d.datasets.find(x => x.label === 'Bank Total');
+      const outDs   = d.datasets.find(x => x.label === 'Output');
+      const inDs    = d.datasets.find(x => x.label === 'Input');
+      if (totalDs) {
+        tableCard.style.display = '';
+        const tbody = document.getElementById('bank-table-body');
+        const rows = [...d.labels].reverse().map((lbl, i) => {
+          const ri = d.labels.length - 1 - i;
+          return `<tr>
+            <td style="white-space:nowrap;font-size:0.8rem;">${escHtml(lbl)}</td>
+            <td style="color:#c8a951;">${fmtGp(totalDs.data[ri])} gp</td>
+            <td style="color:#5cb85c;">${outDs ? fmtGp(outDs.data[ri]) : '—'}</td>
+            <td style="color:#d9534f;">${inDs  ? fmtGp(inDs.data[ri])  : '—'}</td>
+            <td><span class="badge bg-secondary" style="font-size:0.7rem;">auto</span></td>
+            <td></td>
+          </tr>`;
+        }).join('');
+        tbody.innerHTML = rows;
+      }
+    });
+}
 
 // ── P2P Monitor log viewer ──────────────────────────────────────────
 {% if row['p2p_account'] %}

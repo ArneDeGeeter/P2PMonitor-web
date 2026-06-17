@@ -58,6 +58,17 @@ CREATE TABLE IF NOT EXISTS expenses (
     notes       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_exp_account ON expenses(account_id, date_of DESC);
+
+CREATE TABLE IF NOT EXISTS bank_snapshots (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id   INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    recorded_at  TEXT NOT NULL,
+    total_gp     INTEGER NOT NULL,
+    output_gp    INTEGER,
+    input_gp     INTEGER,
+    source       TEXT NOT NULL DEFAULT 'screenshot'
+);
+CREATE INDEX IF NOT EXISTS idx_bank_account ON bank_snapshots(account_id, recorded_at DESC);
 """
 
 
@@ -70,6 +81,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     exp_cols = {r[1] for r in conn.execute("PRAGMA table_info(expenses)").fetchall()}
     if "type" not in exp_cols:
         conn.execute("ALTER TABLE expenses ADD COLUMN type TEXT NOT NULL DEFAULT 'expense'")
+    # bank_snapshots is created via SCHEMA; no ALTER needed
     conn.commit()
 
 
@@ -522,3 +534,40 @@ def _xp_to_level(xp: int) -> int:
         if xp >= _XP_TABLE[level]:
             return level + 1
     return 1
+
+
+def insert_bank_snapshot(
+    conn: sqlite3.Connection,
+    account_id: int,
+    recorded_at: str,
+    total_gp: int,
+    output_gp: Optional[int] = None,
+    input_gp: Optional[int] = None,
+    source: str = "screenshot",
+) -> int:
+    cur = conn.execute(
+        """INSERT INTO bank_snapshots (account_id, recorded_at, total_gp, output_gp, input_gp, source)
+           VALUES (?,?,?,?,?,?)""",
+        (account_id, recorded_at, total_gp, output_gp, input_gp, source),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def list_bank_snapshots(conn: sqlite3.Connection, account_id: int) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM bank_snapshots WHERE account_id=? ORDER BY recorded_at ASC",
+        (account_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_bank_snapshot(conn: sqlite3.Connection, snapshot_id: int) -> None:
+    conn.execute("DELETE FROM bank_snapshots WHERE id=?", (snapshot_id,))
+    conn.commit()
+
+
+def get_account_by_p2p_name(conn: sqlite3.Connection, p2p_account: str) -> Optional[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM accounts WHERE p2p_account=?", (p2p_account,)
+    ).fetchone()
