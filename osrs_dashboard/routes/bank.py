@@ -3,6 +3,7 @@ from ..db import (
     get_account, insert_bank_snapshot, list_bank_snapshots, delete_bank_snapshot,
 )
 from ..bank_watcher import scan_account, scan_status
+from ..screenshotter import list_all_window_titles, list_dreambot_windows
 
 bank_bp = Blueprint("bank", __name__)
 
@@ -97,3 +98,17 @@ def force_scan(account_id: int):
 @bank_bp.get("/bank-scan-status")
 def get_scan_status():
     return jsonify(scan_status())
+
+
+@bank_bp.get("/bank-scan-debug")
+def scan_debug():
+    """Return all visible window titles and which ones matched as DreamBot."""
+    all_titles = list_all_window_titles()
+    matched = list_dreambot_windows()
+    return jsonify({
+        "all_titles": all_titles,
+        "dreambot_windows": [
+            {"title": w["title"], "account_name": w["account_name"]}
+            for w in matched
+        ],
+    })

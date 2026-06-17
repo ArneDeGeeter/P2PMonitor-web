@@ -333,9 +333,21 @@
           <button class="btn btn-sm btn-outline-info" onclick="forceBankScan(this)">
             <i class="bi bi-camera"></i> Scan Now
           </button>
+          <button class="btn btn-sm btn-outline-secondary" onclick="showWindowDebug(this)" title="Show detected windows">
+            <i class="bi bi-bug"></i>
+          </button>
         </div>
         {% endif %}
       </div>
+      {% if row['p2p_account'] %}
+      <div id="bank-debug-panel" class="card-body border-bottom" style="display:none; background:#0f1a30;">
+        <p class="mb-2" style="font-size:0.8rem; color:#a0a0c0;">
+          Searching all windows for titles containing <code>dreambot</code> (case-insensitive),
+          then reading the second <code> - </code>-separated token as the account name.
+        </p>
+        <div id="bank-debug-content" class="text-secondary" style="font-size:0.8rem;">Loading…</div>
+      </div>
+      {% endif %}
       <div class="card-body">
         <form method="POST" action="{{ url_for('bank.add_bank_snapshot', account_id=account_id) }}">
           <div class="row g-2 align-items-end">
@@ -781,6 +793,42 @@ function loadBankChart(force) {
 }
 
 {% if row['p2p_account'] %}
+function showWindowDebug(btn) {
+  const panel = document.getElementById('bank-debug-panel');
+  const content = document.getElementById('bank-debug-content');
+  if (panel.style.display !== 'none') {
+    panel.style.display = 'none';
+    return;
+  }
+  panel.style.display = '';
+  content.textContent = 'Loading…';
+
+  fetch('{{ url_for("bank.scan_debug") }}')
+    .then(r => r.json())
+    .then(d => {
+      const matched = d.dreambot_windows;
+      let html = '';
+
+      if (matched.length) {
+        html += '<strong style="color:#5cb85c;">Matched DreamBot windows:</strong><ul class="mb-2">';
+        matched.forEach(w => {
+          html += `<li><code>${escHtml(w.title)}</code> → account: <strong>${escHtml(w.account_name)}</strong></li>`;
+        });
+        html += '</ul>';
+      } else {
+        html += '<strong style="color:#d9534f;">No DreamBot windows detected.</strong><br>';
+        html += '<small>Make sure DreamBot is open, not minimised, and "DreamBot" appears in the window title.</small><br><br>';
+      }
+
+      html += `<details><summary style="cursor:pointer; color:#a0a0c0;">All visible window titles (${d.all_titles.length})</summary><ul class="mt-1">`;
+      d.all_titles.forEach(t => { html += `<li><code>${escHtml(t)}</code></li>`; });
+      html += '</ul></details>';
+
+      content.innerHTML = html;
+    })
+    .catch(e => { content.textContent = 'Failed: ' + e; });
+}
+
 function updateBankScanStatus() {
   fetch('{{ url_for("bank.get_scan_status") }}')
     .then(r => r.json())
