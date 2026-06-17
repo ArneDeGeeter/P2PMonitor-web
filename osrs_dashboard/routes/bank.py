@@ -2,6 +2,7 @@ from flask import Blueprint, jsonify, request, redirect, url_for, flash, current
 from ..db import (
     get_account, insert_bank_snapshot, list_bank_snapshots, delete_bank_snapshot,
 )
+from ..bank_watcher import scan_account, scan_status
 
 bank_bp = Blueprint("bank", __name__)
 
@@ -84,3 +85,15 @@ def delete_bank_snapshot_route(account_id: int, snap_id: int):
     delete_bank_snapshot(_conn(), snap_id)
     flash("Snapshot deleted.", "success")
     return redirect(url_for("accounts.account_detail", account_id=account_id) + "#bank")
+
+
+@bank_bp.post("/accounts/<int:account_id>/bank-scan")
+def force_scan(account_id: int):
+    """Immediately screenshot + OCR this account's DreamBot window."""
+    result = scan_account(_conn(), account_id)
+    return jsonify(result)
+
+
+@bank_bp.get("/bank-scan-status")
+def get_scan_status():
+    return jsonify(scan_status())

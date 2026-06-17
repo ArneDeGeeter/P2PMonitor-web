@@ -111,18 +111,89 @@ def _ocr_image(img) -> Optional[dict]:
     return result if result.get("total_gp") else None
 
 
+# ── Scan state ──────────────────────────────────────────────────────
+
+_last_scan: Optional[float] = None
+_scan_interval: int = DEFAULT_INTERVAL
+
+
+def scan_status() -> dict:
+    """Return last scan time and seconds until next automatic scan."""
+    if _last_scan is None:
+        return {"last_scan": None, "next_scan_secs": None, "interval": _scan_interval}
+    elapsed = time.time() - _last_scan
+    remaining = max(0, _scan_interval - elapsed)
+    return {
+        "last_scan": datetime.fromtimestamp(_last_scan).strftime("%H:%M:%S"),
+        "next_scan_secs": int(remaining),
+        "interval": _scan_interval,
+    }
+
+
+# ── Per-account scan (also used by force-scan route) ────────────────
+
+def scan_account(conn, account_id: int) -> dict:
+    """
+    Immediately screenshot + OCR the DreamBot window for one account.
+    Returns {"ok": bool, "total_gp": int|None, "error": str|None}.
+    """
+    row = conn.execute(
+        "SELECT p2p_account FROM accounts WHERE id=?", (account_id,)
+    ).fetchone()
+    if not row or not row["p2p_account"]:
+        return {"ok": False, "total_gp": None, "error": "No P2P Monitor account linked."}
+
+    target = row["p2p_account"].lower()
+    windows = list_dreambot_windows()
+    win = next((w for w in windows if w["account_name"].lower() == target), None)
+
+    if win is None:
+        return {"ok": False, "total_gp": None, "error": f"DreamBot window for '{row['p2p_account']}' not found (is it open and not minimised?)."}
+
+    img = capture_region(win["left"], win["top"], win["width"], win["height"])
+    if img is None:
+        return {"ok": False, "total_gp": None, "error": "Screen capture failed. Check screen recording permissions."}
+
+    values = _ocr_image(img)
+    if not values or not values.get("total_gp"):
+        return {"ok": False, "total_gp": None, "error": "OCR found no bank value in the window. Is the script paint visible?"}
+
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    existing = conn.execute(
+        """SELECT id FROM bank_snapshots
+           WHERE account_id=?
+           AND ABS(strftime('%s', recorded_at) - strftime('%s', ?)) < 30""",
+        (account_id, now_str),
+    ).fetchone()
+    if not existing:
+        _db.insert_bank_snapshot(
+            conn,
+            account_id=account_id,
+            recorded_at=now_str,
+            total_gp=values["total_gp"],
+            output_gp=values.get("output_gp"),
+            input_gp=values.get("input_gp"),
+            source="screenshot",
+        )
+
+    return {"ok": True, "total_gp": values["total_gp"],
+            "output_gp": values.get("output_gp"), "input_gp": values.get("input_gp"),
+            "error": None}
+
+
 # ── Main scan loop ───────────────────────────────────────────────────
 
 def _scan_once(conn) -> None:
+    global _last_scan
+
     windows = list_dreambot_windows()
     if not windows:
+        _last_scan = time.time()
         return
 
-    # Build lookup: p2p_account name → account DB row
     db_accounts = conn.execute(
         "SELECT id, p2p_account FROM accounts WHERE p2p_account IS NOT NULL"
     ).fetchall()
-    # Map lowercase for case-insensitive matching
     name_to_id = {row["p2p_account"].lower(): row["id"] for row in db_accounts}
 
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -131,20 +202,16 @@ def _scan_once(conn) -> None:
         wname = (win["account_name"] or "").lower()
         account_id = name_to_id.get(wname)
         if account_id is None:
-            log.debug("DreamBot window '%s' has no linked account", win["account_name"])
             continue
 
         img = capture_region(win["left"], win["top"], win["width"], win["height"])
         if img is None:
-            log.debug("Failed to capture window for '%s'", win["account_name"])
             continue
 
         values = _ocr_image(img)
         if not values or not values.get("total_gp"):
-            log.debug("No bank value found in window for '%s'", win["account_name"])
             continue
 
-        # Dedup: skip if a snapshot already exists within 30 s
         existing = conn.execute(
             """SELECT id FROM bank_snapshots
                WHERE account_id=?
@@ -164,17 +231,19 @@ def _scan_once(conn) -> None:
             source="screenshot",
         )
         log.info(
-            "Bank snapshot saved: %s  total=%s  output=%s  input=%s",
-            win["account_name"],
-            values["total_gp"],
-            values.get("output_gp"),
-            values.get("input_gp"),
+            "Bank snapshot: %s  total=%s  output=%s  input=%s",
+            win["account_name"], values["total_gp"],
+            values.get("output_gp"), values.get("input_gp"),
         )
+
+    _last_scan = time.time()
 
 
 def start_bank_watcher(conn, interval: int = DEFAULT_INTERVAL) -> threading.Thread:
+    global _scan_interval
+    _scan_interval = interval
+
     def loop():
-        # Small delay on startup so the app finishes initialising
         time.sleep(10)
         while True:
             try:

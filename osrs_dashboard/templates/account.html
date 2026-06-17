@@ -325,7 +325,17 @@
   <div class="tab-pane fade" id="bank-tab">
     <!-- Manual entry -->
     <div class="card mb-3">
-      <div class="card-header">Add Bank Snapshot</div>
+      <div class="card-header d-flex align-items-center gap-2">
+        Add Bank Snapshot
+        {% if row['p2p_account'] %}
+        <div class="ms-auto d-flex align-items-center gap-2">
+          <span id="bank-scan-status" class="text-secondary" style="font-size:0.8rem;"></span>
+          <button class="btn btn-sm btn-outline-info" onclick="forceBankScan(this)">
+            <i class="bi bi-camera"></i> Scan Now
+          </button>
+        </div>
+        {% endif %}
+      </div>
       <div class="card-body">
         <form method="POST" action="{{ url_for('bank.add_bank_snapshot', account_id=account_id) }}">
           <div class="row g-2 align-items-end">
@@ -769,6 +779,69 @@ function loadBankChart(force) {
       }
     });
 }
+
+{% if row['p2p_account'] %}
+function updateBankScanStatus() {
+  fetch('{{ url_for("bank.get_scan_status") }}')
+    .then(r => r.json())
+    .then(d => {
+      const el = document.getElementById('bank-scan-status');
+      if (!el) return;
+      if (d.last_scan && d.next_scan_secs !== null) {
+        const mins = Math.floor(d.next_scan_secs / 60);
+        const secs = d.next_scan_secs % 60;
+        el.innerHTML = `<i class="bi bi-clock"></i> Last scan: ${d.last_scan} — next in ${mins}m ${secs}s`;
+      } else {
+        el.innerHTML = `<i class="bi bi-clock"></i> Auto-scan every ${d.interval}s — pending…`;
+      }
+    });
+}
+
+function forceBankScan(btn) {
+  btn.disabled = true;
+  btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Scanning…';
+  const statusEl = document.getElementById('bank-scan-status');
+  if (statusEl) statusEl.textContent = '';
+
+  fetch('{{ url_for("bank.force_scan", account_id=account_id) }}', { method: 'POST' })
+    .then(r => r.json())
+    .then(d => {
+      if (d.ok) {
+        btn.innerHTML = '<i class="bi bi-check-circle"></i> Done';
+        btn.classList.replace('btn-outline-info', 'btn-outline-success');
+        if (statusEl) statusEl.innerHTML = `<span style="color:#5cb85c;">Bank: ${fmtGp(d.total_gp)} gp</span>`;
+        // Reload chart
+        _bankLoaded = false;
+        loadBankChart(true);
+      } else {
+        btn.innerHTML = '<i class="bi bi-exclamation-triangle"></i> Failed';
+        btn.classList.replace('btn-outline-info', 'btn-outline-danger');
+        if (statusEl) statusEl.innerHTML = `<span style="color:#d9534f;">${escHtml(d.error)}</span>`;
+      }
+      setTimeout(() => {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-camera"></i> Scan Now';
+        btn.className = btn.className.replace('btn-outline-success', 'btn-outline-info')
+                                      .replace('btn-outline-danger',  'btn-outline-info');
+        updateBankScanStatus();
+      }, 4000);
+    })
+    .catch(() => {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-camera"></i> Scan Now';
+      if (statusEl) statusEl.innerHTML = `<span style="color:#d9534f;">Request failed</span>`;
+    });
+}
+
+// Poll scan status every 30 s while bank tab is open
+document.getElementById('bank-tab-btn').addEventListener('shown.bs.tab', () => {
+  updateBankScanStatus();
+});
+setInterval(() => {
+  const bankTab = document.getElementById('bank-tab');
+  if (bankTab && bankTab.classList.contains('active')) updateBankScanStatus();
+}, 30000);
+{% endif %}
 
 // ── P2P Monitor log viewer ──────────────────────────────────────────
 {% if row['p2p_account'] %}
