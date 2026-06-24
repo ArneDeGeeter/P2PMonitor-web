@@ -1,7 +1,7 @@
 """
 Background thread that periodically screenshots every open DreamBot window,
-OCRs the paint overlay to extract Output / Input / Total bank values,
-and stores them in bank_snapshots.
+OCRs the paint overlay to extract the Total bank value, and stores it in
+bank_snapshots.
 
 Auto-detection flow:
   1. Use Quartz to list windows whose title contains "DreamBot".
@@ -9,7 +9,7 @@ Auto-detection flow:
   3. Match that name against the p2p_account column in the DB.
   4. Capture the window with `screencapture -l <window_id>`.
   5. OCR the bottom-left area where the DreamBot paint lives.
-  6. Parse "Output: X", "Input: X", "Total: X" lines.
+  6. Parse the "Total: X" line.
   7. Insert a bank_snapshot row (deduplicates within 30 s).
 
 Requires:
@@ -84,12 +84,6 @@ def _extract_values(text: str) -> dict:
     result: dict = {}
     for line in text.splitlines():
         line = line.strip()
-        m = re.search(r"[Oo0]utput\s*[:\s]\s*([0-9.,]+\s*[KMBkmb]?)", line)
-        if m and "output_gp" not in result:
-            result["output_gp"] = _parse_gp(m.group(1))
-        m = re.search(r"[Ii1]nput\s*[:\s]\s*([0-9.,]+\s*[KMBkmb]?)", line)
-        if m and "input_gp" not in result:
-            result["input_gp"] = _parse_gp(m.group(1))
         # "Total: 51.3M" or "T0tal: ..." (OCR typo)
         m = re.search(r"[Tt][Oo0]tal\s*[:\s]\s*([0-9.,]+\s*[KMBkmb]?)", line)
         if m and "total_gp" not in result:
@@ -179,6 +173,28 @@ def ocr_debug(img) -> dict:
     return {"attempts": attempts, "full_img": img_to_b64(img)}
 
 
+# ── Misread detection ────────────────────────────────────────────────
+
+# Every power of 10 from 10x up to 1,000,000,000x (a dropped/duplicated
+# digit anywhere up to billions still gets caught).
+_FACTORS = [10 ** i for i in range(1, 10)]
+
+
+def _is_factor_misread(a: int, b: int, tolerance: float = 0.1) -> bool:
+    """True if a/b (or b/a) is within `tolerance` of any power of 10 from 10x to 1e9x."""
+    if not a or not b:
+        return False
+    ratio = max(a, b) / min(a, b)
+    return any(abs(ratio - f) / f < tolerance for f in _FACTORS)
+
+
+RECENT_WINDOW = 8
+
+
+def _average(values: list[int]) -> Optional[float]:
+    return sum(values) / len(values) if values else None
+
+
 # ── Scan state ──────────────────────────────────────────────────────
 
 _last_scan: Optional[float] = None
@@ -233,20 +249,29 @@ def scan_account(conn, account_id: int) -> dict:
            AND ABS(strftime('%s', recorded_at) - strftime('%s', ?)) < 30""",
         (account_id, now_str),
     ).fetchone()
-    if not existing:
-        _db.insert_bank_snapshot(
-            conn,
-            account_id=account_id,
-            recorded_at=now_str,
-            total_gp=values["total_gp"],
-            output_gp=values.get("output_gp"),
-            input_gp=values.get("input_gp"),
-            source="screenshot",
-        )
+    if existing:
+        return {"ok": True, "total_gp": values["total_gp"], "error": None}
 
-    return {"ok": True, "total_gp": values["total_gp"],
-            "output_gp": values.get("output_gp"), "input_gp": values.get("input_gp"),
-            "error": None}
+    recent = _db.get_recent_bank_snapshots(conn, account_id, RECENT_WINDOW)
+    baseline = _average([s["total_gp"] for s in recent])
+    if baseline and _is_factor_misread(values["total_gp"], baseline):
+        log.warning(
+            "Skipping likely misread for account %s: %s vs recent average %.0f",
+            account_id, values["total_gp"], baseline,
+        )
+        return {"ok": False, "total_gp": values["total_gp"],
+                "error": f"Reading {values['total_gp']} looks like a misread vs the recent "
+                         f"average {round(baseline)} (off by a power of 10) — skipped."}
+
+    _db.insert_bank_snapshot(
+        conn,
+        account_id=account_id,
+        recorded_at=now_str,
+        total_gp=values["total_gp"],
+        source="screenshot",
+    )
+
+    return {"ok": True, "total_gp": values["total_gp"], "error": None}
 
 
 # ── Main scan loop ───────────────────────────────────────────────────
@@ -289,22 +314,47 @@ def _scan_once(conn) -> None:
         if existing:
             continue
 
+        recent = _db.get_recent_bank_snapshots(conn, account_id, RECENT_WINDOW)
+        baseline = _average([s["total_gp"] for s in recent])
+        if baseline and _is_factor_misread(values["total_gp"], baseline):
+            log.warning(
+                "Skipping likely misread for %s: %s vs recent average %.0f",
+                win["account_name"], values["total_gp"], baseline,
+            )
+            continue
+
         _db.insert_bank_snapshot(
             conn,
             account_id=account_id,
             recorded_at=now_str,
             total_gp=values["total_gp"],
-            output_gp=values.get("output_gp"),
-            input_gp=values.get("input_gp"),
             source="screenshot",
         )
-        log.info(
-            "Bank snapshot: %s  total=%s  output=%s  input=%s",
-            win["account_name"], values["total_gp"],
-            values.get("output_gp"), values.get("input_gp"),
-        )
+        log.info("Bank snapshot: %s  total=%s", win["account_name"], values["total_gp"])
 
     _last_scan = time.time()
+
+
+def detect_bank_misreads(conn, account_id: int, window: int = RECENT_WINDOW) -> list[dict]:
+    """
+    Walk stored snapshots chronologically and flag (without deleting) any
+    that are a factor-of-10-misread (10x up to 1e9x, either direction) of the
+    rolling average of the last `window` accepted (kept) values. Using an
+    average instead of a single previous value avoids one already-wrong
+    reading anchoring the baseline for everything after it. Each flagged row
+    is annotated with the baseline it was compared against. Does not mutate
+    the database.
+    """
+    snaps = _db.list_bank_snapshots(conn, account_id)  # ASC by recorded_at
+    flagged = []
+    good_values: list[int] = []
+    for s in snaps:
+        baseline = _average(good_values[-window:])
+        if baseline and _is_factor_misread(s["total_gp"], baseline):
+            flagged.append({**s, "baseline_gp": round(baseline)})
+            continue
+        good_values.append(s["total_gp"])
+    return flagged
 
 
 def start_bank_watcher(conn, interval: int = DEFAULT_INTERVAL) -> threading.Thread:

@@ -327,17 +327,22 @@
     <div class="card mb-3">
       <div class="card-header d-flex align-items-center gap-2">
         Add Bank Snapshot
-        {% if row['p2p_account'] %}
         <div class="ms-auto d-flex align-items-center gap-2">
+          {% if row['p2p_account'] %}
           <span id="bank-scan-status" class="text-secondary" style="font-size:0.8rem;"></span>
           <button class="btn btn-sm btn-outline-info" onclick="forceBankScan(this)">
             <i class="bi bi-camera"></i> Scan Now
           </button>
+          {% endif %}
+          <button class="btn btn-sm btn-outline-warning" onclick="findBankMisreads(this)" title="Find readings off by a factor of 10/100/1000">
+            <i class="bi bi-eraser"></i> Find Misreads
+          </button>
+          {% if row['p2p_account'] %}
           <button class="btn btn-sm btn-outline-secondary" onclick="showWindowDebug(this)" title="Show detected windows">
             <i class="bi bi-bug"></i>
           </button>
+          {% endif %}
         </div>
-        {% endif %}
       </div>
       {% if row['p2p_account'] %}
       <div id="bank-debug-panel" class="card-body border-bottom" style="display:none; background:#0f1a30;">
@@ -348,28 +353,28 @@
         <div id="bank-debug-content" class="text-secondary" style="font-size:0.8rem;">Loading…</div>
       </div>
       {% endif %}
+      <div id="bank-misread-panel" class="card-body border-bottom" style="display:none; background:#0f1a30;">
+        <p class="mb-2" style="font-size:0.8rem; color:#a0a0c0;">
+          Readings flagged below are ~10x, ~100x, or ~1000x off (in either direction) from
+          the previous accepted reading — a common OCR digit-loss/duplication error.
+          Untick any you want to keep, then delete the rest.
+        </p>
+        <div id="bank-misread-content" style="font-size:0.85rem;">Loading…</div>
+      </div>
       <div class="card-body">
         <form method="POST" action="{{ url_for('bank.add_bank_snapshot', account_id=account_id) }}">
           <div class="row g-2 align-items-end">
-            <div class="col-md-3">
+            <div class="col-md-4">
               <label class="form-label form-label-sm">Bank Total (GP)</label>
               <input type="text" name="total_gp" class="form-control form-control-sm"
                      placeholder="e.g. 51300000" required>
             </div>
-            <div class="col-md-2">
-              <label class="form-label form-label-sm">Output (GP, optional)</label>
-              <input type="text" name="output_gp" class="form-control form-control-sm" placeholder="e.g. 2040000">
-            </div>
-            <div class="col-md-2">
-              <label class="form-label form-label-sm">Input (GP, optional)</label>
-              <input type="text" name="input_gp" class="form-control form-control-sm" placeholder="e.g. 104000">
-            </div>
-            <div class="col-md-3">
+            <div class="col-md-5">
               <label class="form-label form-label-sm">Date &amp; Time</label>
               <input type="datetime-local" name="recorded_at" class="form-control form-control-sm"
                      id="bank-datetime">
             </div>
-            <div class="col-md-2">
+            <div class="col-md-3">
               <button type="submit" class="btn btn-osrs btn-sm w-100">Add</button>
             </div>
           </div>
@@ -396,7 +401,7 @@
       <div class="card-body p-0">
         <div style="max-height:300px; overflow-y:auto;">
           <table class="table table-hover mb-0" style="font-size:0.85rem;">
-            <thead><tr><th>Time</th><th>Total</th><th>Output</th><th>Input</th><th>Source</th><th></th></tr></thead>
+            <thead><tr><th>Time</th><th>Total</th><th>Source</th><th></th></tr></thead>
             <tbody id="bank-table-body"></tbody>
           </table>
         </div>
@@ -466,11 +471,12 @@ document.getElementById('creds-tab').addEventListener('shown.bs.tab', () => {
     .then(data => {
       const body = document.getElementById('creds-body');
 
-      const field = (label, value, isSecret=false) => {
+      const field = (label, value, isSecret=false, multiline=false) => {
         const hasValue = value !== null && value !== undefined && value !== '' && value !== 'None';
         const id = 'f_' + Math.random().toString(36).slice(2);
+        const wrapStyle = multiline ? 'white-space:pre-wrap;word-break:break-word;' : '';
         const displayVal = hasValue
-          ? (isSecret ? '••••••••' : `<span style="color:#e0e0e0;font-family:monospace;">${escHtml(value)}</span>`)
+          ? (isSecret ? '••••••••' : `<span style="color:#e0e0e0;font-family:monospace;${wrapStyle}">${escHtml(value)}</span>`)
           : `<span style="color:#555577;font-style:italic;">not set</span>`;
         const btn = (hasValue && isSecret)
           ? `<button class="btn btn-sm btn-outline-secondary ms-2" onclick="toggleVal('${id}','${escJs(value)}')" title="Show/hide"><i class="bi bi-eye"></i></button>`
@@ -485,7 +491,7 @@ document.getElementById('creds-tab').addEventListener('shown.bs.tab', () => {
       rows += field('Password', data.password, true);
       rows += field('Bank PIN', data.bank_pin, true);
       rows += field('Proxy URL', data.proxy_url);
-      rows += field('Notes', data.notes);
+      rows += field('Notes', data.notes, false, true);
 
       if (data.totp_secret) {
         rows += `<tr>
@@ -769,10 +775,8 @@ function loadBankChart(force) {
         }
       });
 
-      // Build snapshot table from the Total XP dataset (index 0 = Bank Total)
+      // Build snapshot table from the Bank Total dataset
       const totalDs = d.datasets.find(x => x.label === 'Bank Total');
-      const outDs   = d.datasets.find(x => x.label === 'Output');
-      const inDs    = d.datasets.find(x => x.label === 'Input');
       if (totalDs) {
         tableCard.style.display = '';
         const tbody = document.getElementById('bank-table-body');
@@ -781,8 +785,6 @@ function loadBankChart(force) {
           return `<tr>
             <td style="white-space:nowrap;font-size:0.8rem;">${escHtml(lbl)}</td>
             <td style="color:#c8a951;">${fmtGp(totalDs.data[ri])} gp</td>
-            <td style="color:#5cb85c;">${outDs ? fmtGp(outDs.data[ri]) : '—'}</td>
-            <td style="color:#d9534f;">${inDs  ? fmtGp(inDs.data[ri])  : '—'}</td>
             <td><span class="badge bg-secondary" style="font-size:0.7rem;">auto</span></td>
             <td></td>
           </tr>`;
@@ -894,6 +896,61 @@ function updateBankScanStatus() {
         el.innerHTML = `<i class="bi bi-clock"></i> Auto-scan every ${d.interval}s — pending…`;
       }
     });
+}
+
+function findBankMisreads(btn) {
+  const panel = document.getElementById('bank-misread-panel');
+  const content = document.getElementById('bank-misread-content');
+  const showing = panel.style.display !== 'none';
+  if (showing) {
+    panel.style.display = 'none';
+    return;
+  }
+  panel.style.display = 'block';
+  content.innerHTML = 'Loading…';
+
+  fetch('{{ url_for("bank.detect_bank_misreads_route", account_id=account_id) }}')
+    .then(r => r.json())
+    .then(d => {
+      if (!d.flagged.length) {
+        content.innerHTML = '<span class="text-secondary">No misreads found.</span>';
+        return;
+      }
+      const rows = d.flagged.map(s => `
+        <div class="form-check d-flex align-items-center gap-2 py-1 border-bottom" style="border-color:#23304f!important;">
+          <input class="form-check-input misread-check" type="checkbox" value="${s.id}" checked id="misread-${s.id}">
+          <label class="form-check-label flex-grow-1" for="misread-${s.id}">
+            <span class="text-secondary">${s.recorded_at}</span>
+            — <strong>${fmtGp(s.total_gp)}</strong>
+            <span class="text-secondary">(baseline ${fmtGp(s.baseline_gp)}, source: ${s.source})</span>
+          </label>
+        </div>`).join('');
+      content.innerHTML = rows + `
+        <div class="mt-2">
+          <button class="btn btn-sm btn-danger" onclick="deleteSelectedMisreads(this)">Delete Selected</button>
+        </div>`;
+    })
+    .catch(() => { content.innerHTML = '<span class="text-danger">Failed to load misreads.</span>'; });
+}
+
+function deleteSelectedMisreads(btn) {
+  const ids = Array.from(document.querySelectorAll('.misread-check:checked')).map(cb => parseInt(cb.value, 10));
+  if (!ids.length) { alert('Nothing selected.'); return; }
+  btn.disabled = true;
+
+  fetch('{{ url_for("bank.delete_bank_snapshots_batch", account_id=account_id) }}', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids }),
+  })
+    .then(r => r.json())
+    .then(d => {
+      document.getElementById('bank-misread-panel').style.display = 'none';
+      _bankLoaded = false;
+      loadBankChart(true);
+      alert(`Deleted ${d.deleted_count} snapshot(s).`);
+    })
+    .catch(() => { btn.disabled = false; alert('Delete failed.'); });
 }
 
 function forceBankScan(btn) {

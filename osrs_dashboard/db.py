@@ -64,8 +64,6 @@ CREATE TABLE IF NOT EXISTS bank_snapshots (
     account_id   INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     recorded_at  TEXT NOT NULL,
     total_gp     INTEGER NOT NULL,
-    output_gp    INTEGER,
-    input_gp     INTEGER,
     source       TEXT NOT NULL DEFAULT 'screenshot'
 );
 CREATE INDEX IF NOT EXISTS idx_bank_account ON bank_snapshots(account_id, recorded_at DESC);
@@ -81,7 +79,21 @@ def _migrate(conn: sqlite3.Connection) -> None:
     exp_cols = {r[1] for r in conn.execute("PRAGMA table_info(expenses)").fetchall()}
     if "type" not in exp_cols:
         conn.execute("ALTER TABLE expenses ADD COLUMN type TEXT NOT NULL DEFAULT 'expense'")
-    # bank_snapshots is created via SCHEMA; no ALTER needed
+    bank_cols = {r[1] for r in conn.execute("PRAGMA table_info(bank_snapshots)").fetchall()}
+    for dropped_col in ("output_gp", "input_gp"):
+        if dropped_col in bank_cols:
+            conn.execute(f"ALTER TABLE bank_snapshots DROP COLUMN {dropped_col}")
+    # Backfill rows whose recorded_at uses the "YYYY-MM-DDTHH:MM[:SS]" datetime-local
+    # format instead of "YYYY-MM-DD HH:MM:SS" — the 'T' separator sorts after a space,
+    # so mixed formats break chronological ORDER BY comparisons.
+    bad_rows = conn.execute(
+        "SELECT id, recorded_at FROM bank_snapshots WHERE recorded_at LIKE '%T%'"
+    ).fetchall()
+    for row in bad_rows:
+        fixed = row["recorded_at"].replace("T", " ")
+        if len(fixed) == 16:
+            fixed += ":00"
+        conn.execute("UPDATE bank_snapshots SET recorded_at=? WHERE id=?", (fixed, row["id"]))
     conn.commit()
 
 
@@ -206,6 +218,7 @@ def list_accounts(conn: sqlite3.Connection) -> list[Account]:
         SELECT a.id, a.username, a.created_at, a.state, a.notes,
                s.polled_at AS last_polled,
                s.overall_xp,
+               b.total_gp AS last_bank_gp,
                (SELECT COALESCE(SUM(e.amount),0) FROM expenses e
                 WHERE e.account_id=a.id AND e.currency='GBP' AND e.type='expense') AS cost_gbp,
                (SELECT COALESCE(SUM(e.amount),0) FROM expenses e
@@ -218,6 +231,10 @@ def list_accounts(conn: sqlite3.Connection) -> list[Account]:
         LEFT JOIN hiscore_snapshots s ON s.id = (
             SELECT id FROM hiscore_snapshots
             WHERE account_id=a.id ORDER BY polled_at DESC LIMIT 1
+        )
+        LEFT JOIN bank_snapshots b ON b.id = (
+            SELECT id FROM bank_snapshots
+            WHERE account_id=a.id ORDER BY recorded_at DESC LIMIT 1
         )
         ORDER BY a.username
     """).fetchall()
@@ -237,6 +254,7 @@ def list_accounts(conn: sqlite3.Connection) -> list[Account]:
             total_cost_usd=r["cost_usd"] or 0.0,
             total_cost_eur=r["cost_eur"] or 0.0,
             total_cost_gp=r["cost_gp"] or 0.0,
+            last_bank_gp=r["last_bank_gp"],
         ))
     return accounts
 
@@ -542,14 +560,12 @@ def insert_bank_snapshot(
     account_id: int,
     recorded_at: str,
     total_gp: int,
-    output_gp: Optional[int] = None,
-    input_gp: Optional[int] = None,
     source: str = "screenshot",
 ) -> int:
     cur = conn.execute(
-        """INSERT INTO bank_snapshots (account_id, recorded_at, total_gp, output_gp, input_gp, source)
-           VALUES (?,?,?,?,?,?)""",
-        (account_id, recorded_at, total_gp, output_gp, input_gp, source),
+        """INSERT INTO bank_snapshots (account_id, recorded_at, total_gp, source)
+           VALUES (?,?,?,?)""",
+        (account_id, recorded_at, total_gp, source),
     )
     conn.commit()
     return cur.lastrowid
@@ -566,6 +582,15 @@ def list_bank_snapshots(conn: sqlite3.Connection, account_id: int) -> list[dict]
 def delete_bank_snapshot(conn: sqlite3.Connection, snapshot_id: int) -> None:
     conn.execute("DELETE FROM bank_snapshots WHERE id=?", (snapshot_id,))
     conn.commit()
+
+
+def get_recent_bank_snapshots(conn: sqlite3.Connection, account_id: int, limit: int = 8) -> list[dict]:
+    """Return up to `limit` most recent snapshots, oldest first."""
+    rows = conn.execute(
+        "SELECT * FROM bank_snapshots WHERE account_id=? ORDER BY recorded_at DESC LIMIT ?",
+        (account_id, limit),
+    ).fetchall()
+    return [dict(r) for r in rows][::-1]
 
 
 def get_account_by_p2p_name(conn: sqlite3.Connection, p2p_account: str) -> Optional[sqlite3.Row]:

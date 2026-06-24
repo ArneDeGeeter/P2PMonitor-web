@@ -16,6 +16,7 @@ class Account:
     total_cost_usd: float = 0.0
     total_cost_eur: float = 0.0
     total_cost_gp: float = 0.0
+    last_bank_gp: Optional[int] = None
 
 
 @dataclass

@@ -1,13 +1,48 @@
 import json
+from datetime import datetime
 from flask import Blueprint, current_app, redirect, url_for, flash, jsonify
 from ..db import get_account, get_account_secrets, get_all_snapshots_for_chart, SKILLS
 from ..hiscores import poll_account, poll_status
+from ..chart_utils import bucket_key
 
 hiscores_bp = Blueprint("hiscores", __name__)
 
 
 def _conn():
     return current_app.config["DB_CONN"]
+
+
+def _downsample_for_chart(snapshots: list[dict]) -> list[dict]:
+    """
+    Keep the last 24h at full resolution, average into hourly buckets for
+    24h-7d ago, and into daily buckets beyond that — same grouping rule as
+    the bank chart, applied per-skill.
+    """
+    if not snapshots:
+        return []
+
+    buckets: dict = {}
+    order: list = []
+    for idx, s in enumerate(snapshots):
+        dt = datetime.strptime(s["polled_at"], "%Y-%m-%d %H:%M:%S")
+        key = bucket_key(dt, idx)
+        if key not in buckets:
+            buckets[key] = []
+            order.append(key)
+        buckets[key].append(s)
+
+    result = []
+    for key in order:
+        group = buckets[key]
+        if key[0] == "raw":
+            result.append(group[0])
+        else:
+            avg_skills = {}
+            for skill in SKILLS:
+                vals = [g["skills"].get(skill, 0) for g in group]
+                avg_skills[skill] = round(sum(vals) / len(vals)) if vals else 0
+            result.append({"polled_at": key[1], "skills": avg_skills})
+    return result
 
 
 @hiscores_bp.post("/accounts/<int:account_id>/refresh")
@@ -47,6 +82,7 @@ def chart_data(account_id: int):
     if not snapshots:
         return jsonify({"labels": [], "datasets": []})
 
+    snapshots = _downsample_for_chart(snapshots)
     labels = [s["polled_at"] for s in snapshots]
 
     # Overall total XP dataset

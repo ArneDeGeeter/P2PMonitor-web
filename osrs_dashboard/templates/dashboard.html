@@ -21,6 +21,7 @@
           <th>Username</th>
           <th>State</th>
           <th>Total XP</th>
+          <th>Bank</th>
           <th>Last Polled</th>
           <th>Expenses</th>
           <th class="text-end">Actions</th>
@@ -46,6 +47,13 @@
           <td>
             {% if acc.total_xp and acc.total_xp > 0 %}
               {{ "{:,}".format(acc.total_xp) }}
+            {% else %}
+              <span class="text-secondary">—</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if acc.last_bank_gp %}
+              {{ acc.last_bank_gp | fmt_gp }} gp
             {% else %}
               <span class="text-secondary">—</span>
             {% endif %}

@@ -4,6 +4,7 @@ from flask import Flask, redirect, url_for
 from .db import open_db, get_or_create_kdf_salt
 from .hiscores import start_poll_loop
 from .bank_watcher import start_bank_watcher
+from .chart_utils import fmt_gp
 
 
 def _print_capabilities() -> None:
@@ -34,6 +35,7 @@ def _print_capabilities() -> None:
 def create_app(db_path: str = "~/.osrs_dashboard.db", poll_interval: int = 3600) -> Flask:
     app = Flask(__name__)
     app.secret_key = secrets.token_hex(32)
+    app.jinja_env.filters["fmt_gp"] = fmt_gp
     app.config["DB_PATH"] = db_path
     app.config["POLL_INTERVAL"] = poll_interval
     app.config["FERNET"] = None
